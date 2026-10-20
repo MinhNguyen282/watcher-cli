@@ -9,8 +9,6 @@ import (
 )
 
 func TestAppendHarnessPrompt(t *testing.T) {
-	t.Parallel()
-
 	t.Run("no harness file", func(t *testing.T) {
 		t.Parallel()
 		require.Equal(t, "base prompt", appendHarnessPrompt("base prompt", t.TempDir()))
@@ -56,7 +54,6 @@ func TestAppendHarnessPrompt(t *testing.T) {
 	})
 
 	t.Run("env override wins", func(t *testing.T) {
-		t.Parallel()
 		dir := t.TempDir()
 		statePath := filepath.Join(dir, "custom.json")
 		require.NoError(t, os.WriteFile(statePath,

@@ -70,7 +70,7 @@ func buildEditorProvider(providerCfg config.ProviderConfig, apiKey, baseURL stri
 		if baseURL != "" {
 			opts = append(opts, anthropic.WithBaseURL(baseURL))
 		}
-		return anthropic.New(opts...), nil
+		return anthropic.New(opts...)
 
 	case openai.Name:
 		opts := []openai.Option{
@@ -83,14 +83,14 @@ func buildEditorProvider(providerCfg config.ProviderConfig, apiKey, baseURL stri
 		if baseURL != "" {
 			opts = append(opts, openai.WithBaseURL(baseURL))
 		}
-		return openai.New(opts...), nil
+		return openai.New(opts...)
 
 	case openrouter.Name:
 		opts := []openrouter.Option{openrouter.WithAPIKey(apiKey)}
 		if len(headers) > 0 {
 			opts = append(opts, openrouter.WithHeaders(headers))
 		}
-		return openrouter.New(opts...), nil
+		return openrouter.New(opts...)
 
 	case google.Name:
 		opts := []google.Option{
@@ -100,7 +100,7 @@ func buildEditorProvider(providerCfg config.ProviderConfig, apiKey, baseURL stri
 		if len(headers) > 0 {
 			opts = append(opts, google.WithHeaders(headers))
 		}
-		return google.New(opts...), nil
+		return google.New(opts...)
 
 	case openaicompat.Name:
 		opts := []openaicompat.Option{
@@ -110,7 +110,7 @@ func buildEditorProvider(providerCfg config.ProviderConfig, apiKey, baseURL stri
 		if len(headers) > 0 {
 			opts = append(opts, openaicompat.WithHeaders(headers))
 		}
-		return openaicompat.New(opts...), nil
+		return openaicompat.New(opts...)
 
 	case "azure", "bedrock", "vercel", "google-vertex":
 		return nil, fmt.Errorf("the harness editor does not support the %q provider yet", providerCfg.Type)
@@ -128,7 +128,7 @@ func buildEditorProvider(providerCfg config.ProviderConfig, apiKey, baseURL stri
 		if len(headers) > 0 {
 			opts = append(opts, openaicompat.WithHeaders(headers))
 		}
-		return openaicompat.New(opts...), nil
+		return openaicompat.New(opts...)
 	}
 }
 

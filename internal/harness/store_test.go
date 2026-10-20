@@ -91,10 +91,10 @@ func TestStoreWriteScripts(t *testing.T) {
 	store := NewStore(dir)
 
 	h := &HarnessState{Scripts: map[string]string{
-		"check.sh":       "#!/bin/sh\n",
-		"../escape.sh":   "path traversal, must be skipped",
-		"nested/ok.sh":   "nested path, must be skipped",
-		"C:\\win.sh":     "backslash path, must be skipped",
+		"check.sh":     "#!/bin/sh\n",
+		"../escape.sh": "path traversal, must be skipped",
+		"nested/ok.sh": "nested path, must be skipped",
+		"C:\\win.sh":   "backslash path, must be skipped",
 	}}
 	require.NoError(t, store.WriteScripts(h))
 

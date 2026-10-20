@@ -25,6 +25,11 @@ func runEvolveCmd(ctx context.Context, cmd *cobra.Command, prompt string, k int,
 	if err != nil {
 		return err
 	}
+	// A git repository is the hard precondition for worktree-based
+	// probing; fail fast before any config/provider work.
+	if _, err := harness.NewWorktreeManager(cwd); err != nil {
+		return fmt.Errorf("--evolve requires a git repository: %w", err)
+	}
 	dataDir, _ := cmd.Flags().GetString("data-dir")
 	debug, _ := cmd.Flags().GetBool("debug")
 

@@ -210,7 +210,8 @@ func finalText(parts []dbPart) string {
 
 // diffOfWorkdir captures the code changes in a probe worktree. The
 // .watcher/ directory is untracked, so harness artifacts never leak
-// into the diff.
+// into the diff. The trailing newline is preserved: `git apply`
+// rejects patches that end mid-line.
 func diffOfWorkdir(ctx context.Context, workDir string) string {
 	if workDir == "" {
 		return ""
@@ -221,7 +222,7 @@ func diffOfWorkdir(ctx context.Context, workDir string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return string(out)
 }
 
 // FormatTraceForLLM renders a trace as compact markdown for the

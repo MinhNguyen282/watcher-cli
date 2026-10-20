@@ -71,6 +71,10 @@ func (h *HarnessState) Sanitize() *HarnessState {
 	out := &HarnessState{
 		ID:           trim(h.ID),
 		SystemPrompt: trim(h.SystemPrompt),
+		// Preserve the rendered section: it is recomputed on the next
+		// save, and dropping it here would strip the prompt from a
+		// freshly loaded state.
+		RenderedSystemPrompt: h.RenderedSystemPrompt,
 	}
 	for _, g := range h.Guardrails {
 		if g = trim(g); g != "" && len(out.Guardrails) < maxGuardrails {
@@ -110,7 +114,7 @@ func (h *HarnessState) Sanitize() *HarnessState {
 // appended to the agent's system prompt. Empty harnesses render to an
 // empty string.
 func (h *HarnessState) RenderSection() string {
-	if h == nil {
+	if h == nil || h.isEmpty() {
 		return ""
 	}
 	var sb strings.Builder
@@ -179,6 +183,19 @@ func (h *HarnessState) RefreshRendered() {
 	h.RenderedSystemPrompt = h.RenderSection()
 }
 
+// isEmpty reports whether the harness has nothing to render.
+func (h *HarnessState) isEmpty() bool {
+	if h == nil {
+		return true
+	}
+	return h.SystemPrompt == "" &&
+		len(h.Guardrails) == 0 &&
+		len(h.ToolGuidance) == 0 &&
+		len(h.Memory) == 0 &&
+		len(h.Skills) == 0 &&
+		len(h.Scripts) == 0
+}
+
 // ToolCallRecord is one tool invocation observed during an agent run.
 type ToolCallRecord struct {
 	ID      string `json:"id"`
@@ -212,17 +229,17 @@ type ExecutionTrace struct {
 	ProbeOutput string `json:"probe_output,omitempty"`
 	// Error is non-empty when the probe failed (timeout, crash, tool
 	// loop). Failed probes still participate in behavioral contrast.
-	Error     string    `json:"error,omitempty"`
-	StartedAt time.Time `json:"started_at"`
-	Duration  time.Duration `json:"-"`
-	DurationMs int64     `json:"duration_ms"`
+	Error      string        `json:"error,omitempty"`
+	StartedAt  time.Time     `json:"started_at"`
+	Duration   time.Duration `json:"-"`
+	DurationMs int64         `json:"duration_ms"`
 }
 
 // Stats summarizes tool usage for the behavioral-contrast prompt.
 type Stats struct {
-	ToolCalls int            `json:"tool_calls"`
-	ToolErrors int           `json:"tool_errors"`
-	ByTool    map[string]int `json:"by_tool"`
+	ToolCalls  int            `json:"tool_calls"`
+	ToolErrors int            `json:"tool_errors"`
+	ByTool     map[string]int `json:"by_tool"`
 }
 
 // ComputeStats derives tool usage statistics from the trace.
@@ -296,13 +313,13 @@ func DefaultRunOptions() RunOptions {
 
 // RunResult is what Optimizer.Run returns when it succeeds.
 type RunResult struct {
-	Base        *ExecutionTrace
-	Candidates  []ProbeOutcome
-	Best        *ProbeOutcome
-	Harness     *HarnessState
-	Lesson      string
-	Applied     bool
-	KeptBranch  string
+	Base       *ExecutionTrace
+	Candidates []ProbeOutcome
+	Best       *ProbeOutcome
+	Harness    *HarnessState
+	Lesson     string
+	Applied    bool
+	KeptBranch string
 }
 
 // Summary renders a short human-readable report of the run.

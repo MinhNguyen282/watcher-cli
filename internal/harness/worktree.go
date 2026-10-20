@@ -140,6 +140,12 @@ func (g *gitWorktrees) ApplyDiff(ctx context.Context, diff string) (bool, error)
 	if strings.TrimSpace(diff) == "" {
 		return true, nil
 	}
+	// `git apply` rejects patches whose final line lacks a newline,
+	// which some producers (and editors) strip. Restore it before
+	// piping.
+	if !strings.HasSuffix(diff, "\n") {
+		diff += "\n"
+	}
 	// `git apply` refuses to touch a dirty tree it cannot safely
 	// patch; the caller keeps the winner branch in that case so the
 	// user can merge it manually.
@@ -155,7 +161,9 @@ func runGit(ctx context.Context, dir string, args ...string) error {
 	return err
 }
 
-// runGitOut executes a git command in dir and returns stdout.
+// runGitOut executes a git command in dir and returns the raw
+// stdout. The output is intentionally not trimmed: a diff must keep
+// its trailing newline or `git apply` rejects it as corrupt.
 func runGitOut(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
@@ -168,7 +176,7 @@ func runGitOut(ctx context.Context, dir string, args ...string) (string, error) 
 		}
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
 }
 
 // runGitStdin executes a git command in dir feeding stdin.

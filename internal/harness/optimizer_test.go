@@ -3,6 +3,8 @@ package harness
 import (
 	"context"
 	"fmt"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,13 +60,18 @@ func (f *fakeWorktrees) ApplyDiff(_ context.Context, diff string) (bool, error) 
 	return true, nil
 }
 
-// fakeRunner records probe specs and returns scripted traces.
+// fakeRunner records probe specs and returns scripted traces. Parallel
+// probes call it concurrently, so access is synchronized.
 type fakeRunner struct {
+	mu    sync.Mutex
 	specs []ProbeSpec
 }
 
 func (f *fakeRunner) RunProbe(_ context.Context, spec ProbeSpec) (*ExecutionTrace, error) {
+	f.mu.Lock()
 	f.specs = append(f.specs, spec)
+	f.mu.Unlock()
+
 	diff := "diff for " + spec.ID
 	if spec.ID == "base" {
 		// The base run models the current behavior: no code change.
@@ -80,6 +87,30 @@ func (f *fakeRunner) RunProbe(_ context.Context, spec ProbeSpec) (*ExecutionTrac
 		GitDiff:    diff,
 		Duration:   time.Second,
 	}, nil
+}
+
+// specIDs returns the recorded probe IDs in a stable order.
+func (f *fakeRunner) specIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ids := make([]string, 0, len(f.specs))
+	for _, s := range f.specs {
+		ids = append(ids, s.ID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// spec returns the first recorded spec with the given ID.
+func (f *fakeRunner) spec(id string) (ProbeSpec, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.specs {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return ProbeSpec{}, false
 }
 
 // fakeEditor returns fixed candidates and picks the first candidate
@@ -141,12 +172,12 @@ func TestOptimizerRunParallel(t *testing.T) {
 	result, err := opt.Run(context.Background(), "Fix the race", opts)
 	require.NoError(t, err)
 
-	// Base probe plus two candidates.
-	require.Len(t, runner.specs, 3)
-	require.Equal(t, "base", runner.specs[0].ID)
-	require.Equal(t, "cand-1", runner.specs[1].ID)
-	require.Equal(t, "cand-2", runner.specs[2].ID)
-	require.Equal(t, "base", runner.specs[0].Harness.ID)
+	// Base probe plus two candidates. Parallel probes finish in
+	// arbitrary order, so compare as a set.
+	require.Equal(t, []string{"base", "cand-1", "cand-2"}, runner.specIDs())
+	base, ok := runner.spec("base")
+	require.True(t, ok)
+	require.Equal(t, "base", base.Harness.ID)
 	require.Equal(t, 2, editor.proposed)
 
 	// Winner selection and application.
@@ -256,9 +287,11 @@ func TestOptimizerRunComposeFallback(t *testing.T) {
 func TestOptimizerValidate(t *testing.T) {
 	t.Parallel()
 	opt := &Optimizer{}
-	require.Error(t, opt.Run(context.Background(), "task", RunOptions{}))
+	_, err := opt.Run(context.Background(), "task", RunOptions{})
+	require.Error(t, err)
 
 	_, wtm, runner, editor := newTestOptimizer(t.TempDir())
 	opt = &Optimizer{Store: NewStore(t.TempDir()), Worktrees: wtm, Editor: editor, Runner: runner}
-	require.Error(t, opt.Run(context.Background(), "", RunOptions{}))
+	_, err = opt.Run(context.Background(), "", RunOptions{})
+	require.Error(t, err)
 }
