@@ -829,6 +829,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		if err != nil {
 			return err
 		}
+		systemPrompt = appendHarnessPrompt(systemPrompt, c.cfg.WorkingDir())
 		result.SetSystemPrompt(systemPrompt)
 		return nil
 	})

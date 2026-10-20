@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/format"
+	"github.com/charmbracelet/crush/internal/harness"
 	"github.com/charmbracelet/crush/internal/herdr"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/pubsub"
@@ -64,6 +65,13 @@ crush run --session {session-id} "Follow up on your last response"
 # Continue the most recent session
 crush run --continue "Follow up on your last response"
 
+# Self-evolve: probe the task, then probe 2 improved harness
+# variants in isolated git worktrees and keep the winner
+crush run --evolve --k 2 --mode parallel "Fix the race in the worker pool"
+
+# Same, but do not touch the working tree (winner stays on a branch)
+crush run --evolve --no-apply "Refactor the auth module"
+
   `,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var (
@@ -90,6 +98,22 @@ crush run --continue "Follow up on your last response"
 
 		if prompt == "" {
 			return fmt.Errorf("no prompt provided")
+		}
+
+		// The self-evolving harness pipeline (--evolve) runs before
+		// workspace setup: it orchestrates the probes itself and does
+		// not need an interactive agent.
+		if evolve, _ := cmd.Flags().GetBool("evolve"); evolve {
+			k, _ := cmd.Flags().GetInt("k")
+			mode, _ := cmd.Flags().GetString("mode")
+			noApply, _ := cmd.Flags().GetBool("no-apply")
+			if k < 1 {
+				return fmt.Errorf("--k must be at least 1")
+			}
+			if !harness.ValidMode(harness.Mode(mode)) {
+				return fmt.Errorf("--mode must be %q or %q", harness.ModeParallel, harness.ModeSequential)
+			}
+			return runEvolveCmd(ctx, cmd, prompt, k, mode, !noApply)
 		}
 
 		event.SetNonInteractive(true)
@@ -172,6 +196,10 @@ func init() {
 	runCmd.Flags().String("reasoning-effort", "", "Reasoning effort for the model (e.g. low, medium, high). Levels depend on the model; unsupported values are rejected with the accepted values listed")
 	runCmd.Flags().StringP("session", "s", "", "Continue a previous session by ID")
 	runCmd.Flags().BoolP("continue", "C", false, "Continue the most recent session")
+	runCmd.Flags().Bool("evolve", false, "Run the self-evolving harness optimizer: probe the task, propose improved harnesses, probe them in git worktrees, and keep the winner")
+	runCmd.Flags().IntP("k", "k", 2, "Number of candidate harnesses to probe when --evolve is set")
+	runCmd.Flags().String("mode", "parallel", "Probe mode for --evolve: 'parallel' or 'sequential'")
+	runCmd.Flags().Bool("no-apply", false, "Do not apply the winning diff to the working tree (keep it on a branch)")
 	runCmd.MarkFlagsMutuallyExclusive("session", "continue")
 }
 
