@@ -71,6 +71,7 @@ func init() {
 		projectsCmd,
 		updateProvidersCmd,
 		logsCmd,
+		watchCmd,
 		logoutCmd,
 		schemaCmd,
 		loginCmd,
