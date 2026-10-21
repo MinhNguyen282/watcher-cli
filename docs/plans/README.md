@@ -1,0 +1,61 @@
+# Implementation Plans — watcher-cli
+
+Các file plan dưới đây được viết sau khi khảo sát codebase trên branch
+`main` (commit sau pull mới nhất). Mỗi file là một gói công việc **độc lập**,
+tự chứa đủ bối cảnh kiến trúc (file/type chính xác) để một agent khác có thể
+implement mà không cần khảo sát lại từ đầu.
+
+## Danh sách & thứ tự khuyến nghị
+
+| # | Plan | Độ khó | Phụ thuộc | Ghi chú delegate |
+|---|---|---|---|---|
+| 1 | [01-shadow-git-checkpoints.md](01-shadow-git-checkpoints.md) | ⭐⭐ | — | Làm trước: 5C (revert hunk) và harness2 đều hưởng lợi. |
+| 2 | [02-multi-model-routing.md](02-multi-model-routing.md) | ⭐⭐ | — | Độc lập hoàn toàn, giá trị chi phí cao, nên làm sớm. |
+| 3 | [03-watchdog-mode.md](03-watchdog-mode.md) | ⭐⭐⭐ | 02 (tùy chọn) | Có thể giao song song với 01/02. |
+| 4 | [04-treesitter-repo-map.md](04-treesitter-repo-map.md) | ⭐⭐⭐⭐ | — | Chú ý ràng buộc CGO: tầng A (pure Go) ship trước. |
+| 5 | [05-sdlc-review-db-inspector.md](05-sdlc-review-db-inspector.md) | ⭐⭐⭐→⭐⭐⭐⭐ | 01 (cho phần 5C) | Chia 3 phần 5A/5B/5C, delegate riêng từng phần. |
+
+## Hướng dẫn delegate cho agent
+
+Khi giao việc, kèm theo prompt mẫu sau (thay `<PLAN>` và `<PHASE>`):
+
+> Đọc file plan `<PLAN>` trong `docs/plans/` và implement theo đúng thứ tự
+> phase trong đó. Chỉ làm `<PHASE>` (mặc định: toàn bộ). Tuân thủ:
+> - `task fmt` (gofumpt) trước khi commit; `task lint` + `go test ./...`
+>   phải sạch.
+> - Log message bắt đầu chữ hoa; comment riêng dòng kết thúc bằng dấu chấm.
+> - Test: testify `require`, `t.Parallel()`, `t.TempDir()`, mock providers
+>   (`config.UseMockProviders` + `config.ResetProviders()`), golden files
+>   (`-update`).
+> - Semantic commit một dòng (`feat: ...`).
+> - Đọc `internal/ui/AGENTS.md` nếu plan đụng tới TUI.
+> Báo cáo lại: file đã tạo/sửa, test đã chạy, phần nào chưa xong và vì sao.
+
+## Điểm neo kiến trúc chung (nhắc nhanh)
+
+- Module `github.com/charmbracelet/crush` (fork watcher-cli), Go 1.27,
+  `CGO_ENABLED=0`, bubbletea v2, SQLite + sqlc + goose.
+- Agent: `internal/agent/coordinator.go` (buildAgent/buildTools/
+  buildAgentModels), `agent.go` (SessionAgent/Model), `agent_tool.go`
+  (sub-agent `task`), `harness_prompt.go` (điểm inject prompt).
+- Config: `internal/config/config.go` (SelectedModelType, SetupAgents,
+  Options), crushrc builtins: `internal/shellconfig/register.go`.
+- Harness2: `internal/harness/` (Store `.watcher/`, WorktreeManager,
+  `llm.go` NewChatAgent/ChatOnce, optimizer).
+- CLI: `internal/cmd/` (cobra, đăng ký trong `root.go` init).
+- UI: `internal/ui/model/ui.go` (sole model), `dialog/` (overlay),
+  `model/keys.go` (keymap — `ctrl+z` đã là suspend), `chat/tools.go`
+  (tool renderer factory), `diffview/`, `notification/`.
+- Workspace facade: `internal/workspace/app_workspace.go`
+  (`AgentRun`, `Subscribe`, ...); events: `app.App.Events/SendEvent`.
+- TUI rules bắt buộc: `internal/ui/AGENTS.md`.
+
+## Trạng thái
+
+- [ ] 01 — Shadow Git Checkpoints
+- [ ] 02 — Multi-Model Routing
+- [ ] 03 — Watchdog Mode
+- [ ] 04 — Tree-sitter Repo Map
+- [ ] 05A — `crush review`
+- [ ] 05B — DB/OpenAPI Inspector
+- [ ] 05C — Split-Pane Diff Viewer
