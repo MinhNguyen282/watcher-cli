@@ -41,6 +41,7 @@ import (
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/question"
+	"github.com/charmbracelet/crush/internal/repomap"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/shadowgit"
 	"github.com/charmbracelet/crush/internal/skills"
@@ -161,6 +162,7 @@ type coordinator struct {
 	notify      pubsub.Publisher[notify.Notification]
 	runComplete pubsub.Publisher[notify.RunComplete]
 	shadow      shadowgit.Service
+	repoMap     *repomap.Service
 	interactive bool
 
 	// agentMu guards mainAgent and mainAgentName: SetMainAgent runs on
@@ -246,6 +248,8 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		}
 	}
 	c.shadow = shadow
+
+	c.repoMap = repomap.New(opts.Config.WorkingDir())
 
 	agentCfg, ok := opts.Config.Config().Agents[config.AgentCoder]
 	if !ok {
@@ -850,6 +854,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 			return err
 		}
 		systemPrompt = appendHarnessPrompt(systemPrompt, c.cfg.WorkingDir())
+		systemPrompt = appendRepoMapPrompt(initCtx, systemPrompt, c.repoMap)
 		result.SetSystemPrompt(systemPrompt)
 		return nil
 	})
@@ -875,6 +880,10 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		}
 		allTools = append(allTools, agentTool)
 	}
+
+	// The repository map tool is always available: it is read-only and
+	// answers from the pre-built index (built lazily on first use).
+	allTools = append(allTools, tools.NewRepoMapTool(c.repoMap))
 
 	if slices.Contains(agent.AllowedTools, tools.AgenticFetchToolName) {
 		agenticFetchTool, err := c.agenticFetchTool(ctx, nil)

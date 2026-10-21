@@ -55,7 +55,7 @@ Khi giao việc, kèm theo prompt mẫu sau (thay `<PLAN>` và `<PHASE>`):
 - [x] 01 — Shadow Git Checkpoints (core service + decorator + `/rewind` dialog)
 - [x] 02 — Multi-Model Routing (slot `fast` cho sub-agent task, `model fast`, `--fast-model`)
 - [x] 03 — Watchdog Mode (`crush watch`, detector, `--analyze`, `--fix`; TUI popup là phase sau)
-- [ ] 04 — Tree-sitter Repo Map
+- [x] 04 — Tree-sitter Repo Map (tầng A pure-Go: go/parser + fallback regex; inject `<repo-map>` + tool `repo_map`; tầng B CGO là phase sau)
 - [ ] 05A — `crush review`
 - [ ] 05B — DB/OpenAPI Inspector
 - [ ] 05C — Split-Pane Diff Viewer
