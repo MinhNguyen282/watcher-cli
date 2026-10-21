@@ -22,9 +22,23 @@ import (
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/shadowgit"
 	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 )
+
+// ShadowGitProvider is implemented by workspaces that host the shadow
+// checkpoint service in-process. Client/server workspaces do not
+// implement it yet, so the UI disables the rewind dialog there.
+type ShadowGitProvider interface {
+	ShadowGit() shadowgit.Service
+}
+
+// ShadowGit returns the in-process shadow checkpoint service, or nil
+// when the working directory is not a git repository.
+func (w *AppWorkspace) ShadowGit() shadowgit.Service {
+	return w.app.Shadow
+}
 
 // AppWorkspace implements the Workspace interface by delegating
 // directly to an in-process [app.App] instance. This is the default

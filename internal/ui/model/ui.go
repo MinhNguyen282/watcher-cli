@@ -45,6 +45,7 @@ import (
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/shadowgit"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/stringext"
 	"github.com/charmbracelet/crush/internal/ui/attachments"
@@ -1544,6 +1545,14 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			slog.Error("Error reported", "error", msg.Msg)
 		}
 		cmds = append(cmds, m.status.Show(msg))
+	case rewindForkedMsg:
+		if m.isAgentBusy() {
+			cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before forking..."))
+			break
+		}
+		cmds = append(cmds, m.newSession())
+		cmds = append(cmds, util.ReportInfo(
+			fmt.Sprintf("Forked from checkpoint %s — continuing in a new session", msg.checkpointID)))
 	case app.UpdateAvailableMsg:
 		text := fmt.Sprintf("Crush update available: v%s → v%s.", msg.CurrentVersion, msg.LatestVersion)
 		if msg.IsDevelopment {
@@ -2180,6 +2189,14 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 	case dialog.ActionSelectSession:
 		m.dialog.CloseDialog(dialog.SessionsID)
 		cmds = append(cmds, m.loadSession(msg.Session.ID))
+
+	// Rewind dialog messages.
+	case dialog.ActionRewindRestore:
+		m.dialog.CloseDialog(dialog.RewindID)
+		cmds = append(cmds, m.rewindRestore(msg.SessionID, msg.CheckpointID))
+	case dialog.ActionRewindFork:
+		m.dialog.CloseDialog(dialog.RewindID)
+		cmds = append(cmds, m.rewindFork(msg.SessionID, msg.CheckpointID))
 
 	// Open dialog message.
 	case dialog.ActionOpenDialog:
@@ -3326,6 +3343,17 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					break
 				}
 				if cmd := m.newSession(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			case key.Matches(msg, m.keyMap.Chat.Rewind):
+				if !m.hasSession() {
+					break
+				}
+				if m.isAgentBusy() {
+					cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before rewinding..."))
+					break
+				}
+				if cmd := m.openRewindDialog(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 			case key.Matches(msg, m.keyMap.Tab):
@@ -5585,6 +5613,10 @@ func (m *UI) openDialog(id string) tea.Cmd {
 		if cmd := m.openNotificationsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case dialog.RewindID:
+		if cmd := m.openRewindDialog(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case dialog.MCPTogglesID:
 		if cmd := m.openMCPTogglesDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -5720,7 +5752,70 @@ func (m *UI) openSessionsDialog() tea.Cmd {
 	return nil
 }
 
-// openFilesDialog opens the file picker dialog.
+// openRewindDialog opens the rewind (time-travel) dialog for the
+// current session.
+func (m *UI) openRewindDialog() tea.Cmd {
+	if m.dialog.ContainsDialog(dialog.RewindID) {
+		m.dialog.BringToFront(dialog.RewindID)
+		return nil
+	}
+	if m.session == nil {
+		return util.ReportWarn("No session to rewind")
+	}
+	rewind, load := dialog.NewRewind(m.com, m.session.ID)
+	m.dialog.OpenDialog(rewind)
+	return load
+}
+
+// rewindRestore restores the working tree to a checkpoint and reports
+// the result as a toast.
+func (m *UI) rewindRestore(sessionID, checkpointID string) tea.Cmd {
+	return func() tea.Msg {
+		provider, ok := m.com.Workspace.(interface{ ShadowGit() shadowgit.Service })
+		if !ok {
+			return util.NewErrorMsg(fmt.Errorf("rewind is not available in this mode"))
+		}
+		svc := provider.ShadowGit()
+		if svc == nil {
+			return util.NewErrorMsg(fmt.Errorf("rewind is not available outside a git repository"))
+		}
+		res, err := svc.Restore(context.Background(), sessionID, checkpointID)
+		if err != nil {
+			return util.NewErrorMsg(err)
+		}
+		msg := fmt.Sprintf("Rewound %d file(s) to checkpoint %s", len(res.Files), checkpointID)
+		if res.SafetyCheckpointID != "" {
+			msg += fmt.Sprintf(" (your previous changes were kept as checkpoint %s)", res.SafetyCheckpointID)
+		}
+		return util.InfoMsg{Type: util.InfoTypeSuccess, Msg: msg}
+	}
+}
+
+// rewindFork restores the working tree to a checkpoint and continues
+// in a fresh session.
+func (m *UI) rewindFork(sessionID, checkpointID string) tea.Cmd {
+	return func() tea.Msg {
+		provider, ok := m.com.Workspace.(interface{ ShadowGit() shadowgit.Service })
+		if !ok {
+			return util.NewErrorMsg(fmt.Errorf("rewind is not available in this mode"))
+		}
+		svc := provider.ShadowGit()
+		if svc == nil {
+			return util.NewErrorMsg(fmt.Errorf("rewind is not available outside a git repository"))
+		}
+		if _, err := svc.Restore(context.Background(), sessionID, checkpointID); err != nil {
+			return util.NewErrorMsg(err)
+		}
+		return rewindForkedMsg{checkpointID: checkpointID}
+	}
+}
+
+// rewindForkedMsg is delivered after a fork restore finished; the
+// session switch happens in Update.
+type rewindForkedMsg struct {
+	checkpointID string
+}
+
 func (m *UI) openFilesDialog() tea.Cmd {
 	if !m.currentModelSupportsImages() {
 		return util.ReportWarn("The current model does not support image attachments")

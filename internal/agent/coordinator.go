@@ -42,6 +42,7 @@ import (
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/shadowgit"
 	"github.com/charmbracelet/crush/internal/skills"
 	"golang.org/x/sync/errgroup"
 
@@ -159,6 +160,7 @@ type coordinator struct {
 	lspManager  *lsp.Manager
 	notify      pubsub.Publisher[notify.Notification]
 	runComplete pubsub.Publisher[notify.RunComplete]
+	shadow      shadowgit.Service
 	interactive bool
 
 	// agentMu guards mainAgent and mainAgentName: SetMainAgent runs on
@@ -193,6 +195,10 @@ type CoordinatorOptions struct {
 	RunComplete pubsub.Publisher[notify.RunComplete]
 	Skills      *skills.Manager
 	Interactive bool
+	// Shadow, when non-nil, is the shared shadow-git checkpoint service
+	// (also exposed to the UI). When nil the coordinator creates its
+	// own service for the config's working directory.
+	Shadow shadowgit.Service
 }
 
 func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, error) {
@@ -226,6 +232,20 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		skillTracker: skillTracker,
 		interactive:  opts.Interactive,
 	}
+
+	// Shadow checkpoints are optional: a non-git working directory
+	// yields a disabled service and the agent runs unchanged. The
+	// caller can share its service instance (so the UI lists the same
+	// checkpoints the agent creates).
+	shadow := opts.Shadow
+	if shadow == nil {
+		var err error
+		shadow, err = shadowgit.New(opts.Config.WorkingDir())
+		if err != nil {
+			slog.Warn("Failed to create shadow git service", "error", err)
+		}
+	}
+	c.shadow = shadow
 
 	agentCfg, ok := opts.Config.Config().Agents[config.AgentCoder]
 	if !ok {
@@ -968,6 +988,13 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	// per delegated turn. The top-level invocation of the sub-agent tool
 	// itself is still wrapped from the coder's side.
 	filteredTools = wrapToolsWithHooks(filteredTools, hookRunner, isSubAgent)
+
+	// Shadow checkpoints wrap the mutating tools of the top-level agent
+	// only: sub-agents run on the same working directory, so the next
+	// top-level snapshot picks their changes up anyway.
+	if !isSubAgent {
+		filteredTools = wrapCheckpointTools(filteredTools, c.shadow)
+	}
 
 	return filteredTools, nil
 }

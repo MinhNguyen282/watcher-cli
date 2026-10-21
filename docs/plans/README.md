@@ -52,7 +52,7 @@ Khi giao việc, kèm theo prompt mẫu sau (thay `<PLAN>` và `<PHASE>`):
 
 ## Trạng thái
 
-- [ ] 01 — Shadow Git Checkpoints
+- [x] 01 — Shadow Git Checkpoints (core service + decorator + `/rewind` dialog; xem commit `feat: add shadow git checkpoints with rewind dialog`)
 - [ ] 02 — Multi-Model Routing
 - [ ] 03 — Watchdog Mode
 - [ ] 04 — Tree-sitter Repo Map

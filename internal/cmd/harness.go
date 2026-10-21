@@ -33,7 +33,7 @@ func runEvolveCmd(ctx context.Context, cmd *cobra.Command, prompt string, k int,
 	dataDir, _ := cmd.Flags().GetString("data-dir")
 	debug, _ := cmd.Flags().GetBool("debug")
 
-	store, err := config.Init(cwd, dataDir, debug)
+	store, err := config.Init(ctx, cwd, dataDir, debug)
 	if err != nil {
 		return err
 	}

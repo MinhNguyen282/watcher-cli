@@ -35,6 +35,7 @@ import (
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/shadowgit"
 	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/ui/anim"
@@ -61,6 +62,10 @@ type App struct {
 	FileTracker filetracker.Service
 
 	AgentCoordinator agent.Coordinator
+
+	// Shadow hosts the shadow-git checkpoint service when the working
+	// directory is a git repository; nil otherwise.
+	Shadow shadowgit.Service
 
 	LSPManager *lsp.Manager
 
@@ -126,6 +131,14 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 		agentNotifications: pubsub.NewBroker[notify.Notification](),
 		runCompletions:     pubsub.NewBroker[notify.RunComplete](),
 	}
+
+	// Shadow checkpoints are best-effort: a non-git working directory
+	// yields a disabled service (never an error).
+	shadow, err := shadowgit.New(store.WorkingDir())
+	if err != nil {
+		slog.Warn("Failed to create shadow git service", "error", err)
+	}
+	app.Shadow = shadow
 
 	app.setupEvents()
 
@@ -870,6 +883,7 @@ func (app *App) initCoderAgent(ctx context.Context, interactive bool) error {
 		RunComplete: app.runCompletions,
 		Skills:      app.Skills,
 		Interactive: interactive,
+		Shadow:      app.Shadow,
 	})
 	if err != nil {
 		slog.Error("Failed to create coder agent", "err", err)
