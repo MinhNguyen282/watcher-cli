@@ -79,6 +79,7 @@ crush run --evolve --no-apply "Refactor the auth module"
 			verbose, _         = cmd.Flags().GetBool("verbose")
 			largeModel, _      = cmd.Flags().GetString("model")
 			smallModel, _      = cmd.Flags().GetString("small-model")
+			fastModel, _       = cmd.Flags().GetString("fast-model")
 			reasoningEffort, _ = cmd.Flags().GetString("reasoning-effort")
 			sessionID, _       = cmd.Flags().GetString("session")
 			useLast, _         = cmd.Flags().GetBool("continue")
@@ -155,7 +156,7 @@ crush run --evolve --no-apply "Refactor the auth module"
 				slog.SetDefault(slog.New(log.New(os.Stderr)))
 			}
 
-			return runNonInteractive(ctx, c, ws, prompt, largeModel, smallModel, reasoningEffort, quiet || verbose, sessionID, useLast)
+			return runNonInteractive(ctx, c, ws, prompt, largeModel, smallModel, fastModel, reasoningEffort, quiet || verbose, sessionID, useLast)
 		}
 
 		ws, cleanup, err := setupLocalWorkspace(cmd)
@@ -184,7 +185,7 @@ crush run --evolve --no-apply "Refactor the auth module"
 			sessionID = sess.ID
 		}
 
-		return appWs.App().RunNonInteractive(ctx, os.Stdout, prompt, largeModel, smallModel, reasoningEffort, quiet || verbose, sessionID, useLast)
+		return appWs.App().RunNonInteractive(ctx, os.Stdout, prompt, largeModel, smallModel, fastModel, reasoningEffort, quiet || verbose, sessionID, useLast)
 	},
 }
 
@@ -193,6 +194,7 @@ func init() {
 	runCmd.Flags().BoolP("verbose", "v", false, "Show logs")
 	runCmd.Flags().StringP("model", "m", "", "Model to use. Accepts 'model' or 'provider/model' to disambiguate models with the same name across providers")
 	runCmd.Flags().String("small-model", "", "Small model to use. If not provided, uses the default small model for the provider")
+	runCmd.Flags().String("fast-model", "", "Fast (cheap) model for high-volume roles like the task sub-agent. If not provided, uses the default fast model for the provider")
 	runCmd.Flags().String("reasoning-effort", "", "Reasoning effort for the model (e.g. low, medium, high). Levels depend on the model; unsupported values are rejected with the accepted values listed")
 	runCmd.Flags().StringP("session", "s", "", "Continue a previous session by ID")
 	runCmd.Flags().BoolP("continue", "C", false, "Continue the most recent session")
@@ -209,7 +211,7 @@ func runNonInteractive(
 	ctx context.Context,
 	c *client.Client,
 	ws *proto.Workspace,
-	prompt, largeModel, smallModel, reasoningEffort string,
+	prompt, largeModel, smallModel, fastModel, reasoningEffort string,
 	hideSpinner bool,
 	continueSessionID string,
 	useLast bool,
@@ -219,8 +221,8 @@ func runNonInteractive(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	if largeModel != "" || smallModel != "" {
-		if err := overrideModels(ctx, c, ws, largeModel, smallModel); err != nil {
+	if largeModel != "" || smallModel != "" || fastModel != "" {
+		if err := overrideModels(ctx, c, ws, largeModel, smallModel, fastModel); err != nil {
 			return fmt.Errorf("failed to override models: %w", err)
 		}
 	}
@@ -534,7 +536,7 @@ func overrideModels(
 	ctx context.Context,
 	c *client.Client,
 	ws *proto.Workspace,
-	largeModel, smallModel string,
+	largeModel, smallModel, fastModel string,
 ) error {
 	cfg, err := c.GetConfig(ctx, ws.ID)
 	if err != nil {
@@ -543,7 +545,7 @@ func overrideModels(
 
 	providers := cfg.Providers.Copy()
 
-	largeMatches, smallMatches := findModelMatches(providers, largeModel, smallModel)
+	largeMatches, smallMatches, fastMatches := findModelMatches(providers, largeModel, smallModel, fastModel)
 
 	var largeProviderID string
 
@@ -562,6 +564,7 @@ func overrideModels(
 		}
 	}
 
+	var smallDefault *config.SelectedModel
 	switch {
 	case smallModel != "":
 		found, err := validateModelMatches(smallMatches, smallModel, "small")
@@ -584,6 +587,28 @@ func overrideModels(
 			if err := c.UpdatePreferredModel(ctx, ws.ID, config.ScopeWorkspace, config.SelectedModelTypeSmall, *sm); err != nil {
 				return fmt.Errorf("failed to set small model: %w", err)
 			}
+			smallDefault = sm
+		}
+	}
+
+	switch {
+	case fastModel != "":
+		found, err := validateModelMatches(fastMatches, fastModel, "fast")
+		if err != nil {
+			return err
+		}
+		slog.Info("Overriding fast model", "provider", found.provider, "model", found.modelID)
+		if err := c.UpdatePreferredModel(ctx, ws.ID, config.ScopeWorkspace, config.SelectedModelTypeFast, config.SelectedModel{
+			Provider: found.provider,
+			Model:    found.modelID,
+		}); err != nil {
+			return fmt.Errorf("failed to set fast model: %w", err)
+		}
+
+	case smallDefault != nil:
+		// The fast slot falls back to the small model.
+		if err := c.UpdatePreferredModel(ctx, ws.ID, config.ScopeWorkspace, config.SelectedModelTypeFast, *smallDefault); err != nil {
+			return fmt.Errorf("failed to set fast model: %w", err)
 		}
 	}
 
@@ -680,13 +705,14 @@ type modelMatch struct {
 	modelID  string
 }
 
-// findModelMatches searches providers for matching large/small model
-// strings.
-func findModelMatches(providers map[string]config.ProviderConfig, largeModel, smallModel string) ([]modelMatch, []modelMatch) {
+// findModelMatches searches providers for matching large/small/fast
+// model strings.
+func findModelMatches(providers map[string]config.ProviderConfig, largeModel, smallModel, fastModel string) ([]modelMatch, []modelMatch, []modelMatch) {
 	largeFilter, largeID := parseModelString(largeModel)
 	smallFilter, smallID := parseModelString(smallModel)
+	fastFilter, fastID := parseModelString(fastModel)
 
-	var largeMatches, smallMatches []modelMatch
+	var largeMatches, smallMatches, fastMatches []modelMatch
 	for name, provider := range providers {
 		if provider.Disable {
 			continue
@@ -698,9 +724,12 @@ func findModelMatches(providers map[string]config.ProviderConfig, largeModel, sm
 			if matchesModel(smallID, smallFilter, m.ID, name) {
 				smallMatches = append(smallMatches, modelMatch{provider: name, modelID: m.ID})
 			}
+			if matchesModel(fastID, fastFilter, m.ID, name) {
+				fastMatches = append(fastMatches, modelMatch{provider: name, modelID: m.ID})
+			}
 		}
 	}
-	return largeMatches, smallMatches
+	return largeMatches, smallMatches, fastMatches
 }
 
 // parseModelString splits "provider/model" into (provider, model) or

@@ -183,8 +183,8 @@ func TestFindModels(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			providers := tt.setupProviders()
 
-			// Use findModels with the model as "large" and empty "small".
-			matches, _, err := findModels(providers, tt.modelStr, "")
+			// Use findModels with the model as "large" and empty "small"/"fast".
+			matches, _, _, err := findModels(providers, tt.modelStr, "", "")
 			if err != nil {
 				if tt.expectError {
 					require.Contains(t, err.Error(), tt.errorContains)

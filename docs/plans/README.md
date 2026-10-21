@@ -52,8 +52,8 @@ Khi giao việc, kèm theo prompt mẫu sau (thay `<PLAN>` và `<PHASE>`):
 
 ## Trạng thái
 
-- [x] 01 — Shadow Git Checkpoints (core service + decorator + `/rewind` dialog; xem commit `feat: add shadow git checkpoints with rewind dialog`)
-- [ ] 02 — Multi-Model Routing
+- [x] 01 — Shadow Git Checkpoints (core service + decorator + `/rewind` dialog)
+- [x] 02 — Multi-Model Routing (slot `fast` cho sub-agent task, `model fast`, `--fast-model`)
 - [ ] 03 — Watchdog Mode
 - [ ] 04 — Tree-sitter Repo Map
 - [ ] 05A — `crush review`

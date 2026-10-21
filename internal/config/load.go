@@ -168,6 +168,7 @@ func Load(ctx context.Context, workingDir, dataDir string, debug bool) (*ConfigS
 	}
 	cfg.Models[SelectedModelTypeLarge] = resolved.Large
 	cfg.Models[SelectedModelTypeSmall] = resolved.Small
+	cfg.Models[SelectedModelTypeFast] = resolved.Fast
 
 	// Persist any fallback corrections while we still hold writeMu.
 	if resolved.LargeFallback {
@@ -182,6 +183,13 @@ func Load(ctx context.Context, workingDir, dataDir string, debug bool) (*ConfigS
 			return store.updatePreferredModelFields(c, SelectedModelTypeSmall, resolved.Small)
 		}); err != nil {
 			return nil, fmt.Errorf("failed to update preferred small model: %w", err)
+		}
+	}
+	if resolved.FastFallback {
+		if err := store.updateLocked(ScopeGlobal, func(c *Config) map[string]any {
+			return store.updatePreferredModelFields(c, SelectedModelTypeFast, resolved.Fast)
+		}); err != nil {
+			return nil, fmt.Errorf("failed to update preferred fast model: %w", err)
 		}
 	}
 	store.SetupAgents()
@@ -754,8 +762,10 @@ func (c *Config) defaultModelSelection(knownProviders []catwalk.Provider) (large
 type resolvedModels struct {
 	Large         SelectedModel
 	Small         SelectedModel
+	Fast          SelectedModel
 	LargeFallback bool // true if Large was corrected to a default
 	SmallFallback bool // true if Small was corrected to a default
+	FastFallback  bool // true if Fast fell back to the small model
 }
 
 // resolveSelectedModels validates the user's configured model selections
@@ -879,8 +889,58 @@ func resolveSelectedModels(cfg *Config, knownProviders []catwalk.Provider) (reso
 		}
 	}
 
+	// The fast slot defaults to the small model: it is the cheap,
+	// high-volume role and only diverges when explicitly configured.
+	// An invalid fast selection falls back to small the same way.
+	fast := small
+	fastModelSelected, fastModelConfigured := cfg.Models[SelectedModelTypeFast]
+	if fastModelConfigured {
+		if fastModelSelected.Model != "" {
+			fast.Model = fastModelSelected.Model
+		}
+		if fastModelSelected.Provider != "" {
+			fast.Provider = fastModelSelected.Provider
+		}
+		model := cfg.GetModel(fast.Provider, fast.Model)
+		if model == nil {
+			fast = small
+			result.FastFallback = true
+		} else {
+			if fastModelSelected.MaxTokens > 0 {
+				fast.MaxTokens = fastModelSelected.MaxTokens
+			} else {
+				fast.MaxTokens = model.DefaultMaxTokens
+			}
+			if fastModelSelected.ReasoningEffort != "" {
+				fast.ReasoningEffort = fastModelSelected.ReasoningEffort
+			} else {
+				fast.ReasoningEffort = model.DefaultReasoningEffort
+			}
+			if fastModelSelected.Temperature != nil {
+				fast.Temperature = fastModelSelected.Temperature
+			}
+			if fastModelSelected.TopP != nil {
+				fast.TopP = fastModelSelected.TopP
+			}
+			if fastModelSelected.TopK != nil {
+				fast.TopK = fastModelSelected.TopK
+			}
+			if fastModelSelected.FrequencyPenalty != nil {
+				fast.FrequencyPenalty = fastModelSelected.FrequencyPenalty
+			}
+			if fastModelSelected.PresencePenalty != nil {
+				fast.PresencePenalty = fastModelSelected.PresencePenalty
+			}
+			if fastModelSelected.ProviderOptions != nil {
+				fast.ProviderOptions = maps.Clone(fastModelSelected.ProviderOptions)
+			}
+			fast.Think = fastModelSelected.Think
+		}
+	}
+
 	result.Large = large
 	result.Small = small
+	result.Fast = fast
 	return result, nil
 }
 

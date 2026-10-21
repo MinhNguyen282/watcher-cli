@@ -55,6 +55,10 @@ func (s SelectedModelType) String() string {
 const (
 	SelectedModelTypeLarge SelectedModelType = "large"
 	SelectedModelTypeSmall SelectedModelType = "small"
+	// SelectedModelTypeFast is the cheap/fast model slot used by
+	// high-volume roles (the task sub-agent). When unset it falls
+	// back to the small model.
+	SelectedModelTypeFast SelectedModelType = "fast"
 )
 
 const (
@@ -1130,7 +1134,7 @@ func (c *Config) SetupAgents() {
 			ID:           AgentTask,
 			Name:         "Task",
 			Description:  "An agent that helps with searching for context and finding implementation details.",
-			Model:        SelectedModelTypeLarge,
+			Model:        SelectedModelTypeFast,
 			ContextPaths: c.Options.ContextPaths,
 			AllowedTools: resolveReadOnlyTools(allowedTools),
 			// NO MCPs or LSPs by default

@@ -32,9 +32,10 @@ type modelMatch struct {
 	modelID  string
 }
 
-func findModels(providers map[string]config.ProviderConfig, largeModel, smallModel string) ([]modelMatch, []modelMatch, error) {
+func findModels(providers map[string]config.ProviderConfig, largeModel, smallModel, fastModel string) ([]modelMatch, []modelMatch, []modelMatch, error) {
 	largeProviderFilter, largeModelID := parseModelStr(providers, largeModel)
 	smallProviderFilter, smallModelID := parseModelStr(providers, smallModel)
+	fastProviderFilter, fastModelID := parseModelStr(providers, fastModel)
 
 	// Validate provider filters exist.
 	for _, pf := range []struct {
@@ -42,16 +43,17 @@ func findModels(providers map[string]config.ProviderConfig, largeModel, smallMod
 	}{
 		{largeProviderFilter, "large"},
 		{smallProviderFilter, "small"},
+		{fastProviderFilter, "fast"},
 	} {
 		if pf.filter != "" {
 			if _, ok := providers[pf.filter]; !ok {
-				return nil, nil, fmt.Errorf("%s model: provider %q not found in configuration. Use 'crush models' to list available models", pf.label, pf.filter)
+				return nil, nil, nil, fmt.Errorf("%s model: provider %q not found in configuration. Use 'crush models' to list available models", pf.label, pf.filter)
 			}
 		}
 	}
 
 	// Find matching models in a single pass.
-	var largeMatches, smallMatches []modelMatch
+	var largeMatches, smallMatches, fastMatches []modelMatch
 	for name, provider := range providers {
 		if provider.Disable {
 			continue
@@ -63,10 +65,13 @@ func findModels(providers map[string]config.ProviderConfig, largeModel, smallMod
 			if filter(smallModelID, smallProviderFilter, m.ID, name) {
 				smallMatches = append(smallMatches, modelMatch{provider: name, modelID: m.ID})
 			}
+			if filter(fastModelID, fastProviderFilter, m.ID, name) {
+				fastMatches = append(fastMatches, modelMatch{provider: name, modelID: m.ID})
+			}
 		}
 	}
 
-	return largeMatches, smallMatches, nil
+	return largeMatches, smallMatches, fastMatches, nil
 }
 
 func filter(modelFilter, providerFilter, model, provider string) bool {

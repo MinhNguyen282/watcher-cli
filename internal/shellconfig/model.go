@@ -23,6 +23,7 @@ import (
 //	    [--frequency-penalty F] [--presence-penalty F]
 //	    [--provider-options JSON]
 //	model small [<provider>/<id>] [...]
+//	model fast  [<provider>/<id>] [...]   (cheap model for the task sub-agent)
 //
 // "add" registers a model on an existing provider (the provider must have
 // been declared with `provider add` first). "remove" removes it. "large" and
@@ -34,7 +35,7 @@ func handleModel(ctx context.Context, args []string, stdin io.Reader, stdout, st
 		return nil
 	}
 	if len(args) < 2 {
-		return usage(stderr, "usage: model add|remove <provider>/<id> | model large|small [<provider>/<id>]")
+		return usage(stderr, "usage: model add|remove <provider>/<id> | model large|small|fast [<provider>/<id>]")
 	}
 
 	switch args[1] {
@@ -42,10 +43,10 @@ func handleModel(ctx context.Context, args []string, stdin io.Reader, stdout, st
 		return modelAdd(b, args, stderr)
 	case "remove", "rm":
 		return modelRemove(b, args, stderr)
-	case "large", "small":
+	case "large", "small", "fast":
 		return modelSelect(b, args, stdout, stderr)
 	default:
-		return usage(stderr, fmt.Sprintf("model: unknown subcommand %q (expected add, remove, large, or small)", args[1]))
+		return usage(stderr, fmt.Sprintf("model: unknown subcommand %q (expected add, remove, large, small, or fast)", args[1]))
 	}
 }
 

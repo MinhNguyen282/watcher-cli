@@ -810,7 +810,7 @@ func mergeCallOptions(model Model, cfg config.ProviderConfig) (fantasy.ProviderO
 }
 
 func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, agent config.Agent, isSubAgent bool) (SessionAgent, error) {
-	large, small, err := c.buildAgentModels(ctx, isSubAgent)
+	large, small, err := c.buildAgentModels(ctx, agent, isSubAgent)
 	if err != nil {
 		return nil, err
 	}
@@ -999,9 +999,17 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	return filteredTools, nil
 }
 
-// TODO: when we support multiple agents we need to change this so that we pass in the agent specific model config
-func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Model, Model, error) {
-	largeModelCfg, ok := c.cfg.Config().Models[config.SelectedModelTypeLarge]
+// buildAgentModels resolves the large and small models for an agent.
+// The agent's configured Model slot selects which selected model backs
+// the agent's "large" (primary) model: coder and plan use the large
+// slot, the task sub-agent uses the fast slot (falling back to small
+// when fast is not configured), keeping exploration cheap.
+func (c *coordinator) buildAgentModels(ctx context.Context, agent config.Agent, isSubAgent bool) (Model, Model, error) {
+	primarySlot := agent.Model
+	if primarySlot == "" {
+		primarySlot = config.SelectedModelTypeLarge
+	}
+	largeModelCfg, ok := c.cfg.Config().Models[primarySlot]
 	if !ok {
 		return Model{}, Model{}, errLargeModelNotSelected
 	}
@@ -1483,17 +1491,17 @@ func (c *coordinator) UpdateModels(ctx context.Context) error {
 // updateAgentModels rebuilds the model and tool configuration for the
 // given agent from the current config.
 func (c *coordinator) updateAgentModels(ctx context.Context, agent SessionAgent, name string) error {
-	// build the models again so we make sure we get the latest config
-	large, small, err := c.buildAgentModels(ctx, false)
-	if err != nil {
-		return err
-	}
-	agent.SetModels(large, small)
-
 	agentCfg, ok := c.cfg.Config().Agents[name]
 	if !ok {
 		return fmt.Errorf("%w: %s", errMainAgentNotFound, name)
 	}
+
+	// build the models again so we make sure we get the latest config
+	large, small, err := c.buildAgentModels(ctx, agentCfg, false)
+	if err != nil {
+		return err
+	}
+	agent.SetModels(large, small)
 
 	tools, err := c.buildTools(ctx, agentCfg, false)
 	if err != nil {

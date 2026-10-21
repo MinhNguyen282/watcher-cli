@@ -1478,6 +1478,7 @@ func (s *ConfigStore) reloadFromDiskLocked(ctx context.Context) error {
 		} else {
 			cfg.Models[SelectedModelTypeLarge] = resolved.Large
 			cfg.Models[SelectedModelTypeSmall] = resolved.Small
+			cfg.Models[SelectedModelTypeFast] = resolved.Fast
 			s.SetupAgents()
 		}
 	}

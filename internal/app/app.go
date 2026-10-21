@@ -313,7 +313,7 @@ func (app *App) resolveSession(ctx context.Context, continueSessionID string, us
 
 // RunNonInteractive runs the application in non-interactive mode with the
 // given prompt, printing to stdout.
-func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt, largeModel, smallModel, reasoningEffort string, hideSpinner bool, continueSessionID string, useLast bool) error {
+func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt, largeModel, smallModel, fastModel, reasoningEffort string, hideSpinner bool, continueSessionID string, useLast bool) error {
 	slog.Info("Running in non-interactive mode")
 
 	// Re-initialize the coder agent without interactive-only tools.
@@ -324,8 +324,8 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	if largeModel != "" || smallModel != "" {
-		if err := app.overrideModelsForNonInteractive(ctx, largeModel, smallModel); err != nil {
+	if largeModel != "" || smallModel != "" || fastModel != "" {
+		if err := app.overrideModelsForNonInteractive(ctx, largeModel, smallModel, fastModel); err != nil {
 			return fmt.Errorf("failed to override models: %w", err)
 		}
 	}
@@ -570,11 +570,12 @@ func (app *App) restoreModelFromSession(ctx context.Context, sessionID string) e
 // Format: "model-name" (searches all providers) or "provider/model-name".
 // Model matching is case-insensitive.
 // If largeModel is provided but smallModel is not, the small model defaults to
-// the provider's default small model.
-func (app *App) overrideModelsForNonInteractive(ctx context.Context, largeModel, smallModel string) error {
+// the provider's default small model. The fast model defaults to the
+// provider's default fast model the same way.
+func (app *App) overrideModelsForNonInteractive(ctx context.Context, largeModel, smallModel, fastModel string) error {
 	providers := app.config.Config().Providers.Copy()
 
-	largeMatches, smallMatches, err := findModels(providers, largeModel, smallModel)
+	largeMatches, smallMatches, fastMatches, err := findModels(providers, largeModel, smallModel, fastModel)
 	if err != nil {
 		return err
 	}
@@ -612,6 +613,25 @@ func (app *App) overrideModelsForNonInteractive(ctx context.Context, largeModel,
 		// No small model specified, but large model was - use provider's default.
 		smallCfg := app.GetDefaultSmallModel(largeProviderID)
 		app.config.OverridePreferredModel(config.SelectedModelTypeSmall, smallCfg)
+	}
+
+	// Override fast model.
+	switch {
+	case fastModel != "":
+		found, err := validateMatches(fastMatches, fastModel, "fast")
+		if err != nil {
+			return err
+		}
+		slog.Info("Overriding fast model for non-interactive run", "provider", found.provider, "model", found.modelID)
+		app.config.OverridePreferredModel(config.SelectedModelTypeFast, config.SelectedModel{
+			Provider: found.provider,
+			Model:    found.modelID,
+		})
+
+	case largeModel != "":
+		// No fast model specified, but large model was - use provider's default.
+		fastCfg := app.GetDefaultFastModel(largeProviderID)
+		app.config.OverridePreferredModel(config.SelectedModelTypeFast, fastCfg)
 	}
 
 	return app.AgentCoordinator.UpdateModels(ctx)
@@ -702,6 +722,59 @@ func (app *App) GetDefaultSmallModel(providerID string) config.SelectedModel {
 		MaxTokens:       model.DefaultMaxTokens,
 		ReasoningEffort: model.DefaultReasoningEffort,
 	}
+}
+
+// fastModelNamePatterns lists ID fragments that identify cheap/fast
+// models across providers.
+var fastModelNamePatterns = []string{"mini", "flash", "haiku", "lite", "nano", "small", "fast"}
+
+// GetDefaultFastModel returns the default fast model for the given
+// provider: the cheapest-looking model in the provider's catalog,
+// falling back to the default small model.
+func (app *App) GetDefaultFastModel(providerID string) config.SelectedModel {
+	cfg := app.config.Config()
+	pc, ok := cfg.Providers.Get(providerID)
+	if ok {
+		for _, pattern := range fastModelNamePatterns {
+			for _, m := range pc.Models {
+				if strings.Contains(strings.ToLower(m.ID), pattern) {
+					return config.SelectedModel{
+						Provider:        providerID,
+						Model:           m.ID,
+						MaxTokens:       m.DefaultMaxTokens,
+						ReasoningEffort: m.DefaultReasoningEffort,
+					}
+				}
+			}
+		}
+		// ChatGPT/Grok subscriptions serve from their own catalogs.
+		switch providerID {
+		case string(catwalk.InferenceProviderOpenAI):
+			if pc.OAuthToken != nil {
+				if fast := chatGPTSmallModel(pc); fast != nil {
+					return config.SelectedModel{
+						Provider:        providerID,
+						Model:           fast.ID,
+						MaxTokens:       fast.DefaultMaxTokens,
+						ReasoningEffort: fast.DefaultReasoningEffort,
+					}
+				}
+			}
+		case string(catwalk.InferenceProviderXAI):
+			if pc.OAuthToken != nil {
+				if fast := grokSmallModel(pc); fast != nil {
+					return config.SelectedModel{
+						Provider:        providerID,
+						Model:           fast.ID,
+						MaxTokens:       fast.DefaultMaxTokens,
+						ReasoningEffort: fast.DefaultReasoningEffort,
+					}
+				}
+			}
+		}
+	}
+	// No cheap model found: the small model is the fast model.
+	return app.GetDefaultSmallModel(providerID)
 }
 
 // chatGPTSmallModel picks a lightweight model from the ChatGPT catalog,
