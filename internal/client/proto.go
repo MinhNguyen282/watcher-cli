@@ -777,6 +777,36 @@ func (c *Client) GetPermissionsSkipRequests(ctx context.Context, id string) (boo
 	return skip.Skip, nil
 }
 
+// SetPermissionMode switches the workspace's permission mode.
+func (c *Client) SetPermissionMode(ctx context.Context, id string, mode string) error {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/permissions/mode", id), nil, jsonBody(proto.PermissionModeRequest{Mode: mode}), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil {
+		return fmt.Errorf("failed to set permission mode: %w", err)
+	}
+	defer rsp.Body.Close()
+	if rsp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to set permission mode: status code %d", rsp.StatusCode)
+	}
+	return nil
+}
+
+// GetPermissionMode retrieves the workspace's permission mode.
+func (c *Client) GetPermissionMode(ctx context.Context, id string) (string, error) {
+	rsp, err := c.get(ctx, fmt.Sprintf("/workspaces/%s/permissions/mode", id), nil, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get permission mode: %w", err)
+	}
+	defer rsp.Body.Close()
+	if rsp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to get permission mode: status code %d", rsp.StatusCode)
+	}
+	var mode proto.PermissionModeRequest
+	if err := json.NewDecoder(rsp.Body).Decode(&mode); err != nil {
+		return "", fmt.Errorf("failed to decode permission mode: %w", err)
+	}
+	return mode.Mode, nil
+}
+
 // GetConfig retrieves the workspace-specific configuration.
 func (c *Client) GetConfig(ctx context.Context, id string) (*config.Config, error) {
 	rsp, err := c.get(ctx, fmt.Sprintf("/workspaces/%s/config", id), nil, nil)

@@ -1085,6 +1085,15 @@ func (app *App) Shutdown() {
 	// before closing the DB so agents can finish writing their state.
 	if app.AgentCoordinator != nil {
 		app.AgentCoordinator.CancelAll()
+		// SessionEnd is the last hook a session fires. Give it a short,
+		// bounded context: shutdown must not wait on a slow hook.
+		if ender, ok := app.AgentCoordinator.(interface {
+			Shutdown(context.Context)
+		}); ok {
+			endCtx, endCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ender.Shutdown(endCtx)
+			endCancel()
+		}
 	}
 
 	// Shared shutdown context for all timeout-bounded cleanup.

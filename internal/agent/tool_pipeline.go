@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"charm.land/fantasy"
@@ -428,27 +429,89 @@ func (p *toolPipeline) emitToolOutcome(ctx context.Context, call fantasy.ToolCal
 	if outcome != "completed" {
 		event = hooks.EventPostToolUseFailure
 	}
-	if !p.runner.HasEvent(event) {
-		return response
-	}
-	result, err := p.runner.Run(ctx, event, tools.GetSessionFromContext(ctx), call.Name, call.Input)
-	if err != nil {
-		slog.Warn("Post-tool hook failed", "event", event, "tool", call.Name, "error", err)
-		return response
-	}
-	if result.Context != "" {
-		if response.Content != "" {
-			response.Content += "\n"
+	if p.runner.HasEvent(event) {
+		result, err := p.runner.Run(ctx, event, tools.GetSessionFromContext(ctx), call.Name, call.Input)
+		switch {
+		case err != nil:
+			slog.Warn("Post-tool hook failed", "event", event, "tool", call.Name, "error", err)
+		default:
+			if result.Context != "" {
+				if response.Content != "" {
+					response.Content += "\n"
+				}
+				response.Content += result.Context
+			}
+			if result.HookCount > 0 {
+				response.Metadata = mergeHookMetadata(response.Metadata, result)
+			}
 		}
-		response.Content += result.Context
-	}
-	if result.HookCount > 0 {
-		response.Metadata = mergeHookMetadata(response.Metadata, result)
 	}
 	if outcome == "completed" {
 		p.emitFileChanged(ctx, call)
+		if context := p.emitTaskHooks(ctx, call, response); context != "" {
+			if response.Content != "" {
+				response.Content += "\n"
+			}
+			response.Content += context
+		}
 	}
 	return response
+}
+
+// emitTaskHooks reports todo-list transitions and returns the context the
+// hooks added. The todos tool replaces the whole list, so its metadata
+// names which items were added and completed; emitting per item keeps a
+// task hook as fine-grained as the model's edit.
+func (p *toolPipeline) emitTaskHooks(ctx context.Context, call fantasy.ToolCall, response fantasy.ToolResponse) string {
+	if p.runner == nil || call.Name != tools.TodosToolName {
+		return ""
+	}
+	created := p.runner.HasEvent(hooks.EventTaskCreated)
+	completed := p.runner.HasEvent(hooks.EventTaskCompleted)
+	if !created && !completed {
+		return ""
+	}
+	var meta tools.TodosResponseMetadata
+	if response.Metadata == "" || json.Unmarshal([]byte(response.Metadata), &meta) != nil {
+		return ""
+	}
+	sessionID := tools.GetSessionFromContext(ctx)
+	var contexts []string
+	if created {
+		for _, task := range meta.JustAdded {
+			contexts = append(contexts, p.emitTaskEvent(ctx, hooks.EventTaskCreated, sessionID, task, meta))
+		}
+	}
+	if completed {
+		for _, task := range meta.JustCompleted {
+			contexts = append(contexts, p.emitTaskEvent(ctx, hooks.EventTaskCompleted, sessionID, task, meta))
+		}
+	}
+	out := make([]string, 0, len(contexts))
+	for _, context := range contexts {
+		if context != "" {
+			out = append(out, context)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func (p *toolPipeline) emitTaskEvent(ctx context.Context, event, sessionID, task string, meta tools.TodosResponseMetadata) string {
+	input, err := json.Marshal(map[string]any{
+		"session_id": sessionID,
+		"task":       task,
+		"completed":  meta.Completed,
+		"total":      meta.Total,
+	})
+	if err != nil {
+		return ""
+	}
+	result, err := p.runner.Run(ctx, event, sessionID, tools.TodosToolName, string(input))
+	if err != nil {
+		slog.Warn("Task hook failed", "event", event, "error", err)
+		return ""
+	}
+	return result.Context
 }
 
 // fileMutatingTools are the tools whose successful call changed a file the

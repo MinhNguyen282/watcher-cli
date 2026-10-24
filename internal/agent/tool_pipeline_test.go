@@ -10,6 +10,8 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/agent/tools"
+	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/stretchr/testify/require"
 )
@@ -251,4 +253,38 @@ func TestPipelinePlanModeAllowsReadOnlyTools(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, response.IsError, response.Content)
 	require.EqualValues(t, 1, executed.Load())
+}
+
+func TestPipelineEmitsTaskHooks(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runner := hooks.NewRunnerForEvents(map[string][]config.HookConfig{
+		hooks.EventTaskCreated:   {{Command: `echo '{"context":"task-created"}'`}},
+		hooks.EventTaskCompleted: {{Command: `echo '{"context":"task-completed"}'`}},
+	}, dir, dir)
+
+	inner := &pipelineTestTool{
+		name: tools.TodosToolName,
+		run: func(context.Context, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return fantasy.WithResponseMetadata(fantasy.NewTextResponse("updated"), tools.TodosResponseMetadata{
+				JustAdded:     []string{"write the test"},
+				JustCompleted: []string{"read the code"},
+				Completed:     1,
+				Total:         2,
+			}), nil
+		},
+	}
+	pipeline := newPipeline(inner, nil, time.Second)
+	pipeline.runner = runner
+
+	response, err := pipeline.Run(t.Context(), fantasy.ToolCall{
+		ID:    "call-todos",
+		Name:  tools.TodosToolName,
+		Input: `{"todos":[]}`,
+	})
+	require.NoError(t, err)
+	require.False(t, response.IsError, response.Content)
+	require.Contains(t, response.Content, "task-created")
+	require.Contains(t, response.Content, "task-completed")
 }

@@ -2217,6 +2217,11 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			m.toggleYoloMode()
 		}
 		m.dialog.CloseDialog(dialog.CommandsID)
+	case dialog.ActionCyclePermissionMode:
+		if cmd := m.cyclePermissionMode(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionSelectNotificationStyle:
 		cfg := m.com.Config()
 		if cfg != nil && cfg.Options != nil {
@@ -6047,6 +6052,18 @@ func (m *UI) handleAgentNotification(n notify.Notification) tea.Cmd {
 		if m.com.IsHyper() {
 			cmds = append(cmds, m.fetchHyperCredits())
 		}
+	case notify.TypeSubagentFinished:
+		message := n.Message
+		if message == "" {
+			message = "A background sub-agent finished."
+		}
+		return tea.Batch(
+			m.sendNotification(notification.Notification{
+				Title:   "Sub-agent finished",
+				Message: message,
+			}),
+			util.CmdHandler(util.NewInfoMsg(message)),
+		)
 	case notify.TypeAgentError:
 		// Terminal edge like TypeAgentFinished; fall through to the
 		// busy/queue refresh below.

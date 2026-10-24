@@ -27,6 +27,10 @@ const (
 	// finished. Message carries the error text when it failed, empty on
 	// success.
 	TypeAWSSSOAuthResult Type = "aws_sso_auth_result"
+	// TypeSubagentFinished indicates a background sub-agent reached a
+	// terminal state. Message carries a short human summary and RunID
+	// carries the sub-agent run identifier used by send_message.
+	TypeSubagentFinished Type = "subagent_finished"
 )
 
 // Notification represents a domain event published by the agent.

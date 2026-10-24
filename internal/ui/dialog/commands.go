@@ -12,6 +12,7 @@ import (
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/commands"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/list"
 	"github.com/charmbracelet/crush/internal/ui/styles"
@@ -538,8 +539,16 @@ func (c *Commands) defaultCommands() []*CommandItem {
 	notificationLabel := "Notification Style"
 	commands = append(commands, NewCommandItem(c.com.Styles, "select_notifications", notificationLabel, "", ActionOpenDialog{DialogID: NotificationsID}))
 
+	permissionModeLabel := "Permission Mode"
+	if controller, ok := c.com.Workspace.(interface{ PermissionMode() string }); ok {
+		mode, err := permission.ParseMode(controller.PermissionMode())
+		if err == nil {
+			permissionModeLabel = "Permission Mode: " + mode.Label()
+		}
+	}
 	commands = append(
 		commands,
+		NewCommandItem(c.com.Styles, "permission_mode", permissionModeLabel, "", ActionCyclePermissionMode{}),
 		NewCommandItem(c.com.Styles, "toggle_yolo", "Toggle Yolo Mode", "ctrl+y", ActionToggleYoloMode{}),
 		NewCommandItem(c.com.Styles, "toggle_help", "Toggle Help", "ctrl+g", ActionToggleHelp{}),
 		NewCommandItem(c.com.Styles, "init", "Initialize Project", "", ActionInitializeProject{}),

@@ -57,3 +57,28 @@ func TestContextBudgetClampsInvalidConfig(t *testing.T) {
 	require.Equal(t, int64(50_000), budget.headroom)
 	require.True(t, budget.shouldCompact(50_000))
 }
+
+func TestContextBudgetPrecomputeAndIdleBands(t *testing.T) {
+	t.Parallel()
+
+	// Small window: the trigger is 80% of 100k, so precompute starts at
+	// 75% of that and idle compaction at 90%.
+	budget := defaultContextBudget(100_000)
+	require.Equal(t, int64(80_000), budget.trigger())
+	require.False(t, budget.precomputeDue(59_999))
+	require.True(t, budget.precomputeDue(60_000))
+	require.False(t, budget.idleCompactDue(71_999))
+	require.True(t, budget.idleCompactDue(72_000))
+	require.True(t, budget.idleCompactDue(80_001))
+
+	// Large window: the trigger is the fixed headroom, not a ratio.
+	large := defaultContextBudget(1_000_000)
+	require.Equal(t, int64(980_000), large.trigger())
+	require.True(t, large.precomputeDue(735_000))
+	require.False(t, large.precomputeDue(734_999))
+
+	// An unknown window has no bands at all.
+	unknown := defaultContextBudget(0)
+	require.False(t, unknown.precomputeDue(1))
+	require.False(t, unknown.idleCompactDue(1))
+}

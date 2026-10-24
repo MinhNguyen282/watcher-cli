@@ -1454,6 +1454,7 @@ var hookEventNames = []string{
 	"PermissionDenied",
 	"UserPromptSubmit",
 	"SessionStart",
+	"SessionEnd",
 	"Stop",
 	"SubagentStart",
 	"SubagentStop",

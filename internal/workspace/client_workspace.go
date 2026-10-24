@@ -418,6 +418,18 @@ func (w *ClientWorkspace) PermissionSetSkipRequests(skip bool) {
 	_ = w.client.SetPermissionsSkipRequests(context.Background(), w.workspaceID(), skip)
 }
 
+func (w *ClientWorkspace) PermissionMode() string {
+	mode, err := w.client.GetPermissionMode(context.Background(), w.workspaceID())
+	if err != nil {
+		return string(permission.ModeDefault)
+	}
+	return mode
+}
+
+func (w *ClientWorkspace) PermissionSetMode(name string) error {
+	return w.client.SetPermissionMode(context.Background(), w.workspaceID(), name)
+}
+
 // -- Questions --
 
 // QuestionAnswer submits answers for a question via the client SDK.

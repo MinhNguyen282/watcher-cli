@@ -16,6 +16,10 @@ import (
 // with an explicit marker instead of being silently accepted.
 const DefaultMaxResultChars = 100_000
 
+// SendMessageToolName addresses a background sub-agent. The tool body lives
+// in internal/agent because it needs the coordinator's run registry.
+const SendMessageToolName = "send_message"
+
 // Backgrounding describes whether a tool may be detached from the turn.
 type Backgrounding int
 
@@ -115,6 +119,13 @@ var toolSpecs = map[string]Spec{
 		RuleContentField: "query",
 		ReadOnly:         true,
 		SearchHint:       "load the schema of a deferred tool",
+		Backgrounding:    BackgroundingNever,
+	},
+	SendMessageToolName: {
+		Name:             SendMessageToolName,
+		RuleContentField: "to",
+		Mutating:         true,
+		SearchHint:       "collect or continue a background sub-agent",
 		Backgrounding:    BackgroundingNever,
 	},
 	ContextUsageToolName: {

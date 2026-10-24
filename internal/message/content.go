@@ -148,6 +148,42 @@ type ShellCommand struct {
 
 func (ShellCommand) isPart() {}
 
+// CompactBoundary marks the transcript position where compaction replaced
+// the earlier conversation with a summary. It is stored as its own
+// system-role row so a resume can tell which window the boundary belongs to
+// without re-deriving it from timestamps. The part never reaches a model:
+// system messages produce no AI history.
+type CompactBoundary struct {
+	// SummaryMessageID is the summary that replaced the earlier messages.
+	SummaryMessageID string `json:"summary_message_id"`
+	// MessagesBefore is how many messages the summary replaced.
+	MessagesBefore int `json:"messages_before"`
+	// PromptTokensBefore is the session's context size at compaction.
+	PromptTokensBefore int64 `json:"prompt_tokens_before"`
+	// FilesKept is how many recently viewed files the working set restored.
+	FilesKept int `json:"files_kept,omitempty"`
+	// Time is when the boundary was written, in Unix seconds.
+	Time int64 `json:"time"`
+}
+
+func (CompactBoundary) isPart() {}
+
+// IsCompactBoundary reports whether the message is a compaction boundary row.
+func (m *Message) IsCompactBoundary() bool {
+	_, ok := m.CompactBoundary()
+	return ok
+}
+
+// CompactBoundary returns the boundary part and whether the message is one.
+func (m *Message) CompactBoundary() (CompactBoundary, bool) {
+	for _, part := range m.Parts {
+		if cb, ok := part.(CompactBoundary); ok {
+			return cb, true
+		}
+	}
+	return CompactBoundary{}, false
+}
+
 // HasShellCommand reports whether the message contains any ShellCommand parts.
 func (m *Message) HasShellCommand() bool {
 	for _, part := range m.Parts {

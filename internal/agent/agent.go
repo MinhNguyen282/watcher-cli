@@ -230,6 +230,14 @@ type sessionAgent struct {
 	// started records sessions whose SessionStart hook already fired.
 	started *csync.Map[string, bool]
 
+	// precompute holds summaries generated off the turn path, and
+	// precomputeInFlight makes that work single-flight per session.
+	precomputeMu       sync.Mutex
+	precompute         map[string]*summaryPrecompute
+	precomputeInFlight map[string]bool
+	// idleTimers holds the one-shot idle compaction timer per session.
+	idleTimers *csync.Map[string, *time.Timer]
+
 	// dispatchMu holds a per-session mutex that serializes the
 	// accepted -> (cancel-on-entry | queued | active) transition in
 	// Run against a concurrent Cancel. The lock is held only during
@@ -318,6 +326,7 @@ func NewSessionAgent(
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
 		acceptedRuns:         csync.NewMap[string, int](),
 		cancelMark:           csync.NewMap[string, uint64](),
+		idleTimers:           csync.NewMap[string, *time.Timer](),
 	}
 }
 
@@ -842,6 +851,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		return nil, err
 	}
 	userMsgCreated = true
+	a.emitMessageDisplay(ctx, call.SessionID, string(message.User), call.Prompt)
 
 	// UserPromptSubmit runs before the prompt reaches the model. A deny or
 	// halt blocks the turn; the user message is kept so the block is
@@ -1337,11 +1347,23 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	// Send notification that agent has finished its turn (skip for
 	// nested/non-interactive sessions).
 	if !call.NonInteractive && a.notify != nil {
+		a.emitNotificationHook(ctx, call.SessionID, "Crush is waiting...", "Agent's turn completed")
 		a.notify.Publish(pubsub.CreatedEvent, notify.Notification{
 			SessionID:    call.SessionID,
 			SessionTitle: currentSession.Title,
 			Type:         notify.TypeAgentFinished,
 		})
+	}
+
+	if currentAssistant != nil {
+		a.emitMessageDisplay(ctx, call.SessionID, string(message.Assistant), currentAssistant.Content().String())
+	}
+
+	// Prepare the next window before it is needed, and arm one idle
+	// compaction in case the user walks away near the trigger.
+	if !shouldSummarize {
+		a.maybePrecomputeSummary(call.SessionID, largeModel, currentSession.PromptTokens, call.ProviderOptions, call.OnAuthRefresh)
+		a.scheduleIdleCompaction(call.SessionID)
 	}
 
 	// Hand off to the next queued prompt (if any) under dispatchMu so
@@ -1487,6 +1509,39 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		}
 	}()
 
+	// A background precompute may already cover most of this transcript.
+	// Reuse it and summarize only the messages that arrived after it, so a
+	// long session pays for the new tail rather than the whole window.
+	cachedSummary, summaryRemainder, cachedUsage, hasCached := a.takePrecomputedSummary(sessionID, msgs)
+	if hasCached {
+		aiMsgs, _ = a.preparePrompt(summaryRemainder, largeModel.CatwalkCfg.SupportsImages)
+	}
+	summaryPromptText := string(summaryPrompt) + "\n\n" + buildSummaryPrompt(currentSession.Todos)
+	if hasCached && len(summaryRemainder) == 0 {
+		summaryMessage, createErr := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
+			Role:             message.Assistant,
+			Model:            largeModel.ModelCfg.Model,
+			Provider:         largeModel.ModelCfg.Provider,
+			IsSummaryMessage: true,
+		})
+		if createErr != nil {
+			return createErr
+		}
+		summaryMessage.AppendContent(cachedSummary)
+		summaryMessage.AddFinish(message.FinishReasonEndTurn, "", "")
+		if persistErr := a.persistCompaction(ctx, sessionID, &currentSession, msgs, largeModel, summaryMessage, cachedUsage, cachedUsage, nil); persistErr != nil {
+			return persistErr
+		}
+		// Release the active request before processing queued messages so
+		// Run() does not see the session as busy.
+		a.activeRequests.Del(sessionID)
+		cancel()
+		return a.finishSummaryQueue(ctx, sessionID)
+	}
+	if hasCached {
+		summaryPromptText = updateSummaryPromptPrefix(cachedSummary) + "\n\n" + summaryPromptText
+	}
+
 	// Summarize with the real system prompt and history as a warm prefix so
 	// the provider can reuse its cache. The summary instruction is appended
 	// to the final user message instead of replacing the system prompt.
@@ -1511,8 +1566,6 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	if err != nil {
 		return err
 	}
-
-	summaryPromptText := string(summaryPrompt) + "\n\n" + buildSummaryPrompt(currentSession.Todos)
 
 	resp, err := agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:          summaryPromptText,
@@ -1590,18 +1643,47 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	}
 
 	summaryMessage.AddFinish(message.FinishReasonEndTurn, "", "")
-	err = a.messages.Update(genCtx, summaryMessage)
-	if err != nil {
+	if err := a.persistCompaction(ctx, sessionID, &currentSession, msgs, largeModel, summaryMessage, resp.TotalUsage, resp.Response.Usage, openrouterCost); err != nil {
 		return err
 	}
 
-	a.updateSessionUsage(largeModel, &currentSession, resp.TotalUsage, openrouterCost, false)
+	// Release the active request before processing queued messages so that
+	// Run() does not see the session as busy.
+	a.activeRequests.Del(sessionID)
+	cancel()
+
+	return a.finishSummaryQueue(ctx, sessionID)
+}
+
+// persistCompaction stores everything a boundary needs: the summary text,
+// the working set that restores the files the conversation read, a
+// dedicated boundary row, and the session pointer a resume starts from.
+func (a *sessionAgent) persistCompaction(
+	ctx context.Context,
+	sessionID string,
+	currentSession *session.Session,
+	msgs []message.Message,
+	largeModel Model,
+	summaryMessage message.Message,
+	usage fantasy.Usage,
+	completionUsage fantasy.Usage,
+	openrouterCost *float64,
+) error {
+	if err := a.messages.Update(ctx, summaryMessage); err != nil {
+		return err
+	}
+
+	// Capture the pre-compaction context size before the summary call's own
+	// usage replaces it.
+	promptTokensBefore := currentSession.PromptTokens
+	a.updateSessionUsage(largeModel, currentSession, usage, openrouterCost, false)
 
 	// Carry the working set across the boundary: the summary names what was
 	// decided, and this hidden message restores the files the conversation
 	// actually read so the next window does not start blind. Failure here is
 	// logged, not fatal: a summary without a working set still beats losing
 	// the history.
+	filesKept := 0
 	if workingSet := buildWorkingSetMessage(msgs, a.workingDir(), ""); workingSet != "" {
 		workingSetMessage, createErr := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
 			Role: message.User,
@@ -1612,42 +1694,52 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		if createErr != nil {
 			slog.Warn("Failed to persist post-compaction working set", "session_id", sessionID, "error", createErr)
 		} else {
+			filesKept = len(recentlyViewedFiles(msgs, recentlyViewedFileLimit))
 			slog.Info(
 				"Restored working set after compaction",
 				"session_id", sessionID,
 				"message_id", workingSetMessage.ID,
-				"files", len(recentlyViewedFiles(msgs, recentlyViewedFileLimit)),
+				"files", filesKept,
 			)
 		}
 	}
 
+	boundary, boundaryErr := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
+		Role: message.System,
+		Parts: []message.ContentPart{
+			message.CompactBoundary{
+				SummaryMessageID:   summaryMessage.ID,
+				MessagesBefore:     len(msgs),
+				PromptTokensBefore: promptTokensBefore,
+				FilesKept:          filesKept,
+				Time:               time.Now().Unix(),
+			},
+		},
+	})
+	if boundaryErr != nil {
+		slog.Warn("Failed to persist compaction boundary", "session_id", sessionID, "error", boundaryErr)
+	}
+
 	// Just in case, get just the last usage info.
-	usage := resp.Response.Usage
 	currentSession.SummaryMessageID = summaryMessage.ID
-	currentSession.CompletionTokens = summaryCompletionTokens(usage, summaryMessage)
+	currentSession.CompletionTokens = summaryCompletionTokens(completionUsage, summaryMessage)
 	currentSession.PromptTokens = 0
-	currentSession.EstimatedUsage = usageIsZero(usage)
-	_, err = a.sessions.Save(genCtx, currentSession)
-	if err != nil {
+	currentSession.EstimatedUsage = usageIsZero(completionUsage)
+	if _, err := a.sessions.Save(ctx, *currentSession); err != nil {
 		return err
 	}
 
 	a.emitPostCompact(ctx, sessionID, summaryMessage.ID)
-
-	// Release the active request before processing queued messages so that
-	// Run() does not see the session as busy.
-	a.activeRequests.Del(sessionID)
-	cancel()
-
-	// Process any messages that were queued while summarizing.
-	queuedMessages, ok := a.messageQueue.Get(sessionID)
-	if !ok || len(queuedMessages) == 0 {
-		return nil
-	}
-	firstQueuedMessage := queuedMessages[0]
-	a.messageQueue.Set(sessionID, queuedMessages[1:])
-	_, qErr := a.Run(ctx, firstQueuedMessage)
-	return qErr
+	slog.Info(
+		"Compacted session",
+		"session_id", sessionID,
+		"summary_message_id", summaryMessage.ID,
+		"boundary_message_id", boundary.ID,
+		"messages_before", len(msgs),
+		"prompt_tokens_before", promptTokensBefore,
+		"files_kept", filesKept,
+	)
+	return nil
 }
 
 func (a *sessionAgent) getCacheControlOptions() fantasy.ProviderOptions {

@@ -175,6 +175,13 @@ func (b *Backend) DeleteSession(ctx context.Context, workspaceID, sessionID stri
 		return err
 	}
 
+	if ws.AgentCoordinator != nil {
+		if ender, ok := ws.AgentCoordinator.(interface {
+			SessionEnd(context.Context, string)
+		}); ok {
+			ender.SessionEnd(ctx, sessionID)
+		}
+	}
 	return ws.Sessions.Delete(ctx, sessionID)
 }
 

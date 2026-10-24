@@ -44,6 +44,32 @@ var Modes = []Mode{
 	ModeBypassPermissions,
 }
 
+// Next returns the next selectable mode in the permissiveness ring.
+// Bypass is skipped when the deployment disabled it, and an unknown current
+// mode restarts the ring at ModeDefault.
+func (m Mode) Next(bypassAllowed bool) Mode {
+	index := -1
+	for i, mode := range Modes {
+		if mode == m {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return ModeDefault
+	}
+	for step := 1; step <= len(Modes); step++ {
+		candidate := Modes[(index+step)%len(Modes)]
+		if candidate == ModeBypassPermissions && !bypassAllowed {
+			// Bypass sits between auto and plan in the ring; restarting
+			// at the default is friendlier than jumping to plan.
+			return ModeDefault
+		}
+		return candidate
+	}
+	return ModeDefault
+}
+
 // ParseMode normalizes a mode string. An empty string means ModeDefault.
 func ParseMode(value string) (Mode, error) {
 	switch trimmed := strings.TrimSpace(value); Mode(trimmed) {

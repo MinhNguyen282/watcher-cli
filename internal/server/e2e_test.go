@@ -365,7 +365,11 @@ func TestE2E_TwoClientsReceiveSameMessage(t *testing.T) {
 	// The pooled DB connection is only released once the last hold
 	// expires, and Windows cannot remove the temp data directory
 	// while that connection is still open.
-	h.backend.SetCreateGrace(200 * time.Millisecond)
+	//
+	// The create grace stays generous: the second POST must find the
+	// first workspace in pathIndex, and a loaded full-suite run can
+	// take longer than a few hundred milliseconds to reach it.
+	h.backend.SetCreateGrace(5 * time.Second)
 	h.backend.SetDetachGrace(200 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(t.Context())

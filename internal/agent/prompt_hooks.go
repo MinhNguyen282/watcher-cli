@@ -171,3 +171,46 @@ func (a *sessionAgent) emitCwdChanged(ctx context.Context, sessionID, workingDir
 		slog.Warn("CwdChanged hook failed", "session_id", sessionID, "error", err)
 	}
 }
+
+// emitMessageDisplay observes a message before the UI renders it. It runs on
+// a bounded detached context: display must never wait on a hook, and a hook
+// that fails must not swallow the message.
+func (a *sessionAgent) emitMessageDisplay(ctx context.Context, sessionID, role, text string) {
+	if a.hooks == nil || a.isSubAgent || !a.hooks.HasEvent(hooks.EventMessageDisplay) {
+		return
+	}
+	input, err := json.Marshal(map[string]string{
+		"session_id": sessionID,
+		"role":       role,
+		"text":       text,
+	})
+	if err != nil {
+		return
+	}
+	hookCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hookGrace)
+	defer cancel()
+	if _, err := a.hooks.Run(hookCtx, hooks.EventMessageDisplay, sessionID, "", string(input)); err != nil {
+		slog.Warn("MessageDisplay hook failed", "session_id", sessionID, "error", err)
+	}
+}
+
+// emitNotificationHook reports a user-facing notification. Observational and
+// bounded.
+func (a *sessionAgent) emitNotificationHook(ctx context.Context, sessionID, title, message string) {
+	if a.hooks == nil || a.isSubAgent || !a.hooks.HasEvent(hooks.EventNotification) {
+		return
+	}
+	input, err := json.Marshal(map[string]string{
+		"session_id": sessionID,
+		"title":      title,
+		"message":    message,
+	})
+	if err != nil {
+		return
+	}
+	hookCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hookGrace)
+	defer cancel()
+	if _, err := a.hooks.Run(hookCtx, hooks.EventNotification, sessionID, "", string(input)); err != nil {
+		slog.Warn("Notification hook failed", "session_id", sessionID, "error", err)
+	}
+}

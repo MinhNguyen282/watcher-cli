@@ -166,6 +166,18 @@ type coordinator struct {
 	// so the tool pipeline and the session agents share one instance.
 	hookRunner *hooks.Runner
 
+	// instructionsOnce keeps InstructionsLoaded to one emission: every
+	// agent build loads the same context files.
+	instructionsOnce sync.Once
+	// touchedSessions records sessions this coordinator ran, so Shutdown
+	// can announce SessionEnd for each.
+	touchedSessions *csync.Map[string, struct{}]
+	// endedSessions de-duplicates SessionEnd between delete and shutdown.
+	endedSessions sync.Map
+	// subagents tracks background sub-agent runs started by the agent
+	// tool, addressable through send_message.
+	subagents *subagentRegistry
+
 	// planModeState remembers the mode to restore when a plan is approved.
 	// It is created once per coordinator because both plan tools share it.
 	planModeOnce  sync.Once
@@ -239,21 +251,23 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 	skillTracker := skills.NewTracker(activeSkills)
 
 	c := &coordinator{
-		cfg:          opts.Config,
-		sessions:     opts.Sessions,
-		messages:     opts.Messages,
-		permissions:  opts.Permissions,
-		questions:    opts.Questions,
-		history:      opts.History,
-		filetracker:  opts.FileTracker,
-		lspManager:   opts.LSPManager,
-		notify:       opts.Notify,
-		runComplete:  opts.RunComplete,
-		agents:       make(map[string]SessionAgent),
-		allSkills:    allSkills,
-		activeSkills: activeSkills,
-		skillTracker: skillTracker,
-		interactive:  opts.Interactive,
+		cfg:             opts.Config,
+		sessions:        opts.Sessions,
+		messages:        opts.Messages,
+		permissions:     opts.Permissions,
+		questions:       opts.Questions,
+		history:         opts.History,
+		filetracker:     opts.FileTracker,
+		lspManager:      opts.LSPManager,
+		notify:          opts.Notify,
+		runComplete:     opts.RunComplete,
+		agents:          make(map[string]SessionAgent),
+		allSkills:       allSkills,
+		activeSkills:    activeSkills,
+		skillTracker:    skillTracker,
+		interactive:     opts.Interactive,
+		touchedSessions: csync.NewMap[string, struct{}](),
+		subagents:       newSubagentRegistry(),
 	}
 
 	// Shadow checkpoints are optional: a non-git working directory
@@ -465,6 +479,9 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 	runID := RunIDFromContext(ctx)
 	channel := ChannelFromContext(ctx)
 	c.syncSessionChannel(ctx, sessionID, channel)
+	if c.touchedSessions != nil {
+		c.touchedSessions.Set(sessionID, struct{}{})
+	}
 	run := func() (*fantasy.AgentResult, error) {
 		return agent.Run(ctx, SessionAgentCall{
 			SessionID:         sessionID,
@@ -930,6 +947,8 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 	// values; the work is local and always completes.
 	initCtx := context.WithoutCancel(ctx)
 
+	prompt.SetContextObserver(c.instructionsObserver(initCtx))
+
 	c.readyWg.Go(func() error {
 		systemPrompt, err := prompt.Build(initCtx, large.Model.Provider(), large.Model.Model(), c.cfg)
 		if err != nil {
@@ -1019,6 +1038,18 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
 		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 	)
+
+	// send_message is only meaningful where the agent tool exists, and a
+	// sub-agent must not be able to address sibling runs.
+	if !isSubAgent &&
+		slices.Contains(agent.AllowedTools, AgentToolName) &&
+		!slices.Contains(c.cfg.Config().Options.DisabledTools, tools.SendMessageToolName) {
+		sendMessage, err := c.sendMessageTool(ctx)
+		if err != nil {
+			return nil, err
+		}
+		allTools = append(allTools, sendMessage)
+	}
 
 	// Question and plan-mode tools are interactive-only: a sub-agent must
 	// not be able to change the session's permission posture.
@@ -1558,10 +1589,12 @@ func (c *coordinator) BeginAccepted(sessionID string) *AcceptedRun {
 }
 
 func (c *coordinator) Cancel(sessionID string) {
+	c.cancelSubagentsForSession(sessionID)
 	c.currentAgent().Cancel(sessionID)
 }
 
 func (c *coordinator) CancelAll() {
+	c.cancelAllSubagents()
 	c.currentAgent().CancelAll()
 }
 
@@ -1791,6 +1824,11 @@ type subAgentParams struct {
 	ToolCallID     string
 	Prompt         string
 	SessionTitle   string
+	// Name is the human label the agent tool was given. Background runs
+	// use it as the address of last resort in send_message.
+	Name string
+	// Type is the sub-agent shape (task, explore, plan, fork).
+	Type string
 	// SessionSetup is an optional callback invoked after session creation
 	// but before agent execution, for custom session configuration.
 	SessionSetup func(sessionID string)
@@ -1814,9 +1852,7 @@ func callTopK(providerCfg config.ProviderConfig, topK *int64) *int64 {
 // It creates a sub-session, runs the agent with the given prompt, and propagates
 // the cost to the parent session.
 func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (fantasy.ToolResponse, error) {
-	// Create sub-session
-	agentToolSessionID := c.sessions.CreateAgentToolSessionID(params.AgentMessageID, params.ToolCallID)
-	session, err := c.sessions.CreateTaskSession(ctx, agentToolSessionID, params.SessionID, params.SessionTitle)
+	session, err := c.createSubagentSession(ctx, params)
 	if err != nil {
 		return fantasy.ToolResponse{}, fmt.Errorf("create session: %w", err)
 	}
@@ -1830,40 +1866,14 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 		c.inheritParentContext(ctx, params.SessionID, session.ID)
 	}
 
-	// Get model configuration
-	model := params.Agent.Model()
-	maxTokens := model.CatwalkCfg.DefaultMaxTokens
-	if model.ModelCfg.MaxTokens != 0 {
-		maxTokens = model.ModelCfg.MaxTokens
-	}
-
-	providerCfg, ok := c.cfg.Config().Providers.Get(model.ModelCfg.Provider)
-	if !ok {
-		return fantasy.ToolResponse{}, errModelProviderNotConfigured
+	turn, err := c.subagentTurn(params.Agent, session.ID)
+	if err != nil {
+		return fantasy.ToolResponse{}, err
 	}
 
 	c.emitSubagentHook(ctx, hooks.EventSubagentStart, session.ID, params, nil)
 
-	// Run the agent
-	run := func() (*fantasy.AgentResult, error) {
-		subOpts := getProviderOptions(model, providerCfg)
-		injectOpenrouterSessionID(subOpts, session.ID)
-		return params.Agent.Run(ctx, SessionAgentCall{
-			SessionID:        session.ID,
-			Prompt:           params.Prompt,
-			MaxOutputTokens:  maxTokens,
-			ProviderOptions:  subOpts,
-			Temperature:      model.ModelCfg.Temperature,
-			TopP:             model.ModelCfg.TopP,
-			TopK:             callTopK(providerCfg, model.ModelCfg.TopK),
-			FrequencyPenalty: model.ModelCfg.FrequencyPenalty,
-			PresencePenalty:  model.ModelCfg.PresencePenalty,
-			NonInteractive:   true,
-			OnAuthRefresh:    c.makeAuthRefreshCallback(providerCfg),
-		})
-	}
-	result, err := run()
-	c.askToSignInAgain(err, model)
+	result, err := turn(ctx, params.Prompt)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to generate response: %s", err)), nil
 	}

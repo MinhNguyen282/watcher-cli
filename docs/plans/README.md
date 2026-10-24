@@ -17,7 +17,7 @@ implement mà không cần khảo sát lại từ đầu.
 | 6 | [06-verify-live-repomap.md](06-verify-live-repomap.md) | ⭐⭐⭐ | — | Vòng verify tất định + repo map incremental, ưu tiên cho coding task. |
 | 7 | [07-deepseek-effort-commands.md](07-deepseek-effort-commands.md) | ⭐ | — | `/efforts` cho DeepSeek (low/high/max/none) + best practices từ deepseek-harness. |
 | 8 | [08-deepseek-harness-best-practices.md](08-deepseek-harness-best-practices.md) | ⭐⭐⭐⭐ | — | Kế hoạch đầy đủ áp dụng tool pipeline, job/session, compaction, UI, testing từ deepseek-harness. |
-| 9 | [09-claude-code-harness-port.md](09-claude-code-harness-port.md) | ⭐⭐⭐⭐⭐ | 08 (P0 pipeline) | Port harness Claude Code 2.1.302 — **implemented (partial)**: tool spec, prompt blocks, permission modes, compaction v2, subagents, tool search, memory, hooks, plan mode; background subagent/send_message và vài hook event còn mở. |
+| 9 | [09-claude-code-harness-port.md](09-claude-code-harness-port.md) | ⭐⭐⭐⭐⭐ | 08 (P0 pipeline) | Port harness Claude Code 2.1.302 — **implemented (complete)**: tool spec, prompt blocks, permission modes, compaction v2 (precompute + boundary + idle), subagents (background + send_message), tool search, memory, hooks (20 events), plan mode, in-TUI mode switcher. Chỉ còn per-block cache scopes phía fantasy là ngoài tầm repo. |
 
 ## Hướng dẫn delegate cho agent
 

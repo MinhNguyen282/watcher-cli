@@ -745,6 +745,34 @@ func (c *controllerV1) handleGetWorkspacePermissionsSkip(w http.ResponseWriter, 
 	jsonEncode(w, proto.PermissionSkipRequest{Skip: skip})
 }
 
+// handlePostWorkspacePermissionsMode switches the workspace's permission
+// mode. An unknown mode is rejected by the backend.
+func (c *controllerV1) handlePostWorkspacePermissionsMode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req proto.PermissionModeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.server.logError(r, "Failed to decode request", "error", err)
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return
+	}
+	if err := c.backend.SetPermissionMode(id, req.Mode); err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+}
+
+// handleGetWorkspacePermissionsMode returns the workspace's permission mode.
+func (c *controllerV1) handleGetWorkspacePermissionsMode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	mode, err := c.backend.GetPermissionMode(id)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, proto.PermissionModeRequest{Mode: mode})
+}
+
 // handleError maps backend errors to HTTP status codes and writes the
 // JSON error response.
 //

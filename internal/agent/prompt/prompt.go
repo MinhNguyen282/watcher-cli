@@ -30,6 +30,10 @@ type Prompt struct {
 	now             func() time.Time
 	platform        string
 	workingDir      string
+	// onContextFiles reports the context files a build actually loaded.
+	// It runs inside BuildSet so an observer sees exactly what the model
+	// was given, not what the config asked for.
+	onContextFiles func(contextFiles, globalContextFiles []ContextFile)
 }
 
 type PromptDat struct {
@@ -91,6 +95,14 @@ func NewPromptWithDynamic(name, promptTemplate, dynamicTemplate string, opts ...
 	return p, nil
 }
 
+// SetContextObserver registers a callback that receives the context files
+// each build loads. Callers that build a prompt after construction (the
+// coordinator does) use this instead of an option so the template and the
+// observer stay decoupled.
+func (p *Prompt) SetContextObserver(fn func(contextFiles, globalContextFiles []ContextFile)) {
+	p.onContextFiles = fn
+}
+
 func (p *Prompt) Build(ctx context.Context, provider, model string, store *config.ConfigStore) (string, error) {
 	set, err := p.BuildSet(ctx, provider, model, store)
 	if err != nil {
@@ -106,6 +118,9 @@ func (p *Prompt) BuildSet(ctx context.Context, provider, model string, store *co
 	d, err := p.promptData(ctx, provider, model, store)
 	if err != nil {
 		return Set{}, err
+	}
+	if p.onContextFiles != nil {
+		p.onContextFiles(d.ContextFiles, d.GlobalContextFiles)
 	}
 	static, err := p.render(p.name, p.template, d)
 	if err != nil {

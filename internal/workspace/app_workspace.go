@@ -298,6 +298,34 @@ func (w *AppWorkspace) PermissionSetSkipRequests(skip bool) {
 	w.app.Permissions.SetSkipRequests(skip)
 }
 
+func (w *AppWorkspace) PermissionMode() string {
+	modeService, ok := w.app.Permissions.(permission.ModeService)
+	if !ok {
+		return string(permission.ModeDefault)
+	}
+	return string(modeService.Mode())
+}
+
+func (w *AppWorkspace) PermissionSetMode(name string) error {
+	modeService, ok := w.app.Permissions.(permission.ModeService)
+	if !ok {
+		return errors.New("permission modes are not supported by this workspace")
+	}
+	mode, err := permission.ParseMode(name)
+	if err != nil {
+		return err
+	}
+	options := modeService.ModeOptions()
+	if err := permission.ValidateTransition(modeService.Mode(), mode, permission.ModeOptions{
+		BypassAllowed:    options.BypassAllowed,
+		PlanExitApproved: true,
+	}); err != nil {
+		return err
+	}
+	modeService.SetMode(mode)
+	return nil
+}
+
 // -- Questions --
 
 func (w *AppWorkspace) QuestionAnswer(responses []question.Answer) bool {

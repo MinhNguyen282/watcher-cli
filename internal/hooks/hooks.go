@@ -42,6 +42,8 @@ const (
 	EventStop = "Stop"
 	// EventSessionStart runs when a session starts its first turn.
 	EventSessionStart = "SessionStart"
+	// EventSessionEnd runs when a session is closed or deleted.
+	EventSessionEnd = "SessionEnd"
 	// EventSubagentStart runs when a sub-agent is launched.
 	EventSubagentStart = "SubagentStart"
 	// EventSubagentStop runs when a sub-agent finishes.
@@ -71,6 +73,7 @@ var Events = []string{
 	EventPermissionDenied,
 	EventUserPromptSubmit,
 	EventSessionStart,
+	EventSessionEnd,
 	EventStop,
 	EventSubagentStart,
 	EventSubagentStop,

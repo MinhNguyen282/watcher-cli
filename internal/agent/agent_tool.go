@@ -23,6 +23,17 @@ type AgentParams struct {
 	// implementation plan, and "fork" inherits this conversation's context.
 	SubagentType string `json:"subagent_type,omitempty" description:"Agent shape: task, explore, plan or fork"`
 	Name         string `json:"name,omitempty" description:"Optional name for this agent, for reporting"`
+	// RunInBackground returns a receipt immediately instead of waiting for
+	// the sub-agent. Use send_message to collect or continue it.
+	RunInBackground bool `json:"run_in_background,omitempty" description:"Start the agent without waiting; collect it with send_message"`
+}
+
+// SendMessageParams addresses a background sub-agent.
+type SendMessageParams struct {
+	To string `json:"to" description:"Background sub-agent id or name"`
+	// Message continues the sub-agent when non-empty. An empty message
+	// returns the run's current state and output.
+	Message string `json:"message,omitempty" description:"Follow-up message; omit to read the current result"`
 }
 
 // Subagent type names.
@@ -44,7 +55,12 @@ var validSubagentTypes = map[string]bool{
 
 const (
 	AgentToolName = "agent"
+	// sendMessageToolName addresses a background sub-agent.
+	sendMessageToolName = tools.SendMessageToolName
 )
+
+//go:embed templates/send_message.md
+var sendMessageDescription string
 
 func (c *coordinator) agentTool(ctx context.Context) (fantasy.AgentTool, error) {
 	agents, err := c.subagentSet(ctx)
@@ -93,15 +109,21 @@ func (c *coordinator) agentTool(ctx context.Context) (fantasy.AgentTool, error) 
 			if name := strings.TrimSpace(params.Name); name != "" {
 				title = name
 			}
-			return c.runSubAgent(ctx, subAgentParams{
+			subagentParams := subAgentParams{
 				Agent:          subagent,
 				SessionID:      sessionID,
 				AgentMessageID: agentMessageID,
 				ToolCallID:     call.ID,
 				Prompt:         params.Prompt,
 				SessionTitle:   title,
+				Name:           strings.TrimSpace(params.Name),
+				Type:           subagentType,
 				InheritContext: subagentType == SubagentFork,
-			})
+			}
+			if params.RunInBackground {
+				return c.startSubagent(ctx, subagentParams)
+			}
+			return c.runSubAgent(ctx, subagentParams)
 		},
 	), nil
 }

@@ -27,6 +27,13 @@ var (
 	}
 	gooseInitOnce sync.Once
 	gooseInitErr  error
+
+	// migrationsMu serializes goose.Up across databases. goose keeps
+	// process-global provider state (base filesystem, dialect, store), so
+	// concurrent migrations on different files can interleave their
+	// version-table work under load. Open/migrate is a startup-cost path,
+	// so one lock costs nothing and removes the race.
+	migrationsMu sync.Mutex
 )
 
 //go:embed migrations/*.sql
@@ -160,7 +167,10 @@ func Connect(ctx context.Context, dataDir string, opts ...ConnectOption) (*sql.D
 		return nil, fmt.Errorf("failed to initialize goose: %w", err)
 	}
 
-	if err := goose.Up(conn, "migrations"); err != nil {
+	migrationsMu.Lock()
+	err = goose.Up(conn, "migrations")
+	migrationsMu.Unlock()
+	if err != nil {
 		conn.Close()
 		releaseLock()
 		slog.Error("Failed to apply migrations", "error", err)

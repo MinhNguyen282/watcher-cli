@@ -267,6 +267,22 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			Fails(400, 404, 500).
 			Handle(c.handlePostWorkspacePermissionsSkip),
 
+		apigen.Get("/v1/workspaces/{id}/permissions/mode").
+			Summary("Get permission mode").
+			Tags("permissions").
+			PathParam("id", "Workspace ID").
+			Responds(proto.PermissionModeRequest{}).
+			Fails(404, 500).
+			Handle(c.handleGetWorkspacePermissionsMode),
+
+		apigen.Post("/v1/workspaces/{id}/permissions/mode").
+			Summary("Set permission mode").
+			Tags("permissions").
+			PathParam("id", "Workspace ID").
+			Accepts(proto.PermissionModeRequest{}).
+			Fails(400, 404, 500).
+			Handle(c.handlePostWorkspacePermissionsMode),
+
 		apigen.Post("/v1/workspaces/{id}/permissions/grant").
 			Summary("Grant permission").
 			Tags("permissions").

@@ -58,3 +58,43 @@ func (b *Backend) GetPermissionsSkip(workspaceID string) (bool, error) {
 
 	return ws.Permissions.SkipRequests(), nil
 }
+
+// SetPermissionMode switches the workspace's permission mode. The change is
+// a user action, so leaving plan mode counts as explicit approval; bypass
+// still follows the deployment's configuration.
+func (b *Backend) SetPermissionMode(workspaceID, name string) error {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return err
+	}
+	modeService, ok := ws.Permissions.(permission.ModeService)
+	if !ok {
+		return ErrPermissionModeUnavailable
+	}
+	mode, err := permission.ParseMode(name)
+	if err != nil {
+		return err
+	}
+	options := modeService.ModeOptions()
+	if err := permission.ValidateTransition(modeService.Mode(), mode, permission.ModeOptions{
+		BypassAllowed:    options.BypassAllowed,
+		PlanExitApproved: true,
+	}); err != nil {
+		return err
+	}
+	modeService.SetMode(mode)
+	return nil
+}
+
+// GetPermissionMode returns the workspace's current permission mode.
+func (b *Backend) GetPermissionMode(workspaceID string) (string, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return "", err
+	}
+	modeService, ok := ws.Permissions.(permission.ModeService)
+	if !ok {
+		return "", ErrPermissionModeUnavailable
+	}
+	return string(modeService.Mode()), nil
+}

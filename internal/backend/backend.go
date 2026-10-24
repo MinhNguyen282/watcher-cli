@@ -29,20 +29,21 @@ import (
 
 // Common errors returned by backend operations.
 var (
-	ErrWorkspaceNotFound       = errors.New("workspace not found")
-	ErrLSPClientNotFound       = errors.New("LSP client not found")
-	ErrAgentNotInitialized     = errors.New("agent coordinator not initialized")
-	ErrAgentBusy               = errors.New("agent is busy with a run")
-	ErrPathRequired            = errors.New("path is required")
-	ErrInvalidPermissionAction = errors.New("invalid permission action")
-	ErrUnknownCommand          = errors.New("unknown command")
-	ErrInvalidClientID         = errors.New("invalid client_id")
-	ErrClientNotAttached       = errors.New("client not attached")
-	ErrWorkspaceClosing        = errors.New("workspace closing")
-	ErrServerShuttingDown      = errors.New("server is shutting down")
-	ErrServerNotIdle           = errors.New("server is hosting live workspaces")
-	ErrClientRetired           = errors.New("client has been retired")
-	ErrChannelOptInMismatch    = errors.New("requested channels differ from the existing workspace; channels are an explicit opt-in and are not shared across duplicate creates")
+	ErrWorkspaceNotFound         = errors.New("workspace not found")
+	ErrLSPClientNotFound         = errors.New("LSP client not found")
+	ErrAgentNotInitialized       = errors.New("agent coordinator not initialized")
+	ErrAgentBusy                 = errors.New("agent is busy with a run")
+	ErrPathRequired              = errors.New("path is required")
+	ErrInvalidPermissionAction   = errors.New("invalid permission action")
+	ErrPermissionModeUnavailable = errors.New("permission modes are not supported by this workspace")
+	ErrUnknownCommand            = errors.New("unknown command")
+	ErrInvalidClientID           = errors.New("invalid client_id")
+	ErrClientNotAttached         = errors.New("client not attached")
+	ErrWorkspaceClosing          = errors.New("workspace closing")
+	ErrServerShuttingDown        = errors.New("server is shutting down")
+	ErrServerNotIdle             = errors.New("server is hosting live workspaces")
+	ErrClientRetired             = errors.New("client has been retired")
+	ErrChannelOptInMismatch      = errors.New("requested channels differ from the existing workspace; channels are an explicit opt-in and are not shared across duplicate creates")
 )
 
 // DefaultCreateGrace is the window in which a client must open an SSE
@@ -263,6 +264,13 @@ func (w *Workspace) Shutdown() {
 	}
 	if w.App != nil && w.AgentCoordinator != nil {
 		w.AgentCoordinator.CancelAll()
+		if ender, ok := w.AgentCoordinator.(interface {
+			Shutdown(context.Context)
+		}); ok {
+			endCtx, endCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ender.Shutdown(endCtx)
+			endCancel()
+		}
 	}
 	w.runWG.Wait()
 	if w.App != nil {

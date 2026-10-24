@@ -11,9 +11,12 @@ import (
 func newTestEventLog(t *testing.T) (*EventLog, string) {
 	t.Helper()
 
-	conn, err := db.Connect(t.Context(), t.TempDir())
+	dataDir := t.TempDir()
+	conn, err := db.Connect(t.Context(), dataDir)
 	require.NoError(t, err)
-	t.Cleanup(func() { conn.Close() })
+	// Release, not Close: the pool keys connections by data directory and
+	// would otherwise hand a closed handle to the next test that connects.
+	t.Cleanup(func() { require.NoError(t, db.Release(dataDir)) })
 
 	_, err = db.New(conn).CreateSession(t.Context(), db.CreateSessionParams{
 		ID:    "event-session",

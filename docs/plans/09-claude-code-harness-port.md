@@ -626,7 +626,7 @@ Landed in this repository:
   rule.
 - Tests: `internal/permission/policy_test.go`.
 
-### Phase 3 — compaction (partial, resumable working set complete)
+### Phase 3 — compaction (complete)
 
 - `internal/agent/compaction.go`: re-read the five most recently viewed
   files after a summary into a hidden working-set message, plus
@@ -636,10 +636,25 @@ Landed in this repository:
 - The working set quotes the user's last two messages verbatim, so their
   own words survive a summary that would otherwise paraphrase them.
 - Tests: `internal/agent/compaction_test.go`.
-- Not done: background precompute, dedicated compact-boundary rows,
-  idle compaction, preserved-tail rows in SQLite.
+- Precompute: `internal/agent/compaction_precompute.go` prepares a summary
+  once usage reaches 75% of the compaction trigger, caches it against the
+  transcript position it covered, and reuses it at compaction time. When new
+  messages arrived after the cached position, only the tail is summarized
+  and the cached text becomes the update context.
+- Compact boundary: `message.CompactBoundary` is a dedicated system-role row
+  written after every summary with the summary id, replaced message count,
+  pre-compaction prompt tokens and files restored. System rows produce no
+  AI history, so the marker is durable without reaching the model.
+- Idle compaction: an idle timer per session (`idleCompactionDelay`) fires
+  when a session sits at 90% of the trigger, so a user who walks away does
+  not come back to a session that compacts mid-turn.
+- The retained tail is the summary plus the hidden working set, both stored
+  in SQLite; `finishSummaryQueue` continues any prompt queued during compaction.
+- `db.Connect` now serializes `goose.Up` with a process-wide mutex: goose
+  keeps global provider state, and concurrent migrations on different files
+  were the likely source of the intermittently failing session test.
 
-### Phase 4 — subagents (partial)
+### Phase 4 — subagents (complete)
 
 - `agent` tool accepts `subagent_type`: `task` (default), `explore`
   (tool list filtered to `Spec.ReadOnly` tools), `plan` (the coordinator's
@@ -648,10 +663,23 @@ Landed in this repository:
 - Unknown types are refused with a typed error; the plan agent is resolved
   from the coordinator's built agents, which keeps the plan agent's own
   `agent` tool from recursing through construction.
-- Tests: `TestReadOnlyToolNames`.
-- Not done: background subagents, `send_message`/handback protocol.
+- Background sub-agents: `run_in_background: true` returns a receipt
+  immediately and runs the child in a detached context
+  (`internal/agent/subagents.go`). The registry tracks state, output, error
+  and parent session; `Cancel` and `CancelAll` cancel the matching runs.
+- `send_message` addresses a run by id, name or unique id prefix. An empty
+  message waits for the in-flight turn and returns the result; a non-empty
+  message continues the same child session and returns its new output. The
+  test covering the registry, settling and truncation is
+  `internal/agent/subagents_test.go`.
+- Completion publishes `notify.TypeSubagentFinished` and the `Notification`
+  hook, and the TUI renders it as an info message plus a desktop
+  notification.
+- Tests: `TestReadOnlyToolNames`, `TestSubagentRegistryFind`,
+  `TestSubagentRunSettlesOnceAndReleasesWaiters`,
+  `TestDescribeSubagentTruncatesOutput`.
 
-### Phase 5 — hooks (most events)
+### Phase 5 — hooks (complete)
 
 - `internal/hooks/hooks.go`: 19-event surface with `Events`/`IsEvent`.
 - `internal/hooks/runner.go`: per-event runners
@@ -667,8 +695,19 @@ Landed in this repository:
   directory move.
 - Config rejects unknown hook events at load time and normalizes all known
   spellings.
-- Not done: `SessionEnd`, `InstructionsLoaded`, `TaskCreated`/
-  `TaskCompleted`, `Notification`, `MessageDisplay`.
+- `InstructionsLoaded` fires once per coordinator through the prompt's
+  context-file observer, so it reports the files the model actually got.
+- `TaskCreated`/`TaskCompleted` are emitted by the tool pipeline from the
+  `todos` metadata (`just_added`, `just_completed`), and their context is
+  folded back into the result like every observational hook.
+- `Notification` fires from the agent's turn-finished notification and from
+  sub-agent completion; `MessageDisplay` observes the user prompt and the
+  finished assistant message.
+- `SessionEnd` is idempotent per session and fires on session delete
+  (`Backend.DeleteSession`) and on workspace/app shutdown, bounded to two
+  seconds so shutdown never waits on a hook.
+- Tests: `TestPipelineEmitsTaskHooks`; the per-event runner contract tests
+  live in `internal/hooks`.
 
 ### Phase 6 — deferred tools and accounting (complete)
 
@@ -709,15 +748,13 @@ Landed in this repository:
 
 ### Still open
 
-- Phase 4 remainder: background subagents with status reporting, and the
-  `send_message`/handback protocol.
-- Phase 5 remainder: `SessionEnd`, `InstructionsLoaded`,
-  `TaskCreated`/`TaskCompleted`, `Notification`, `MessageDisplay`.
-- Phase 3 remainder: background precompute, compact-boundary rows, idle
-  compaction.
 - Provider-level per-block cache scopes: blocks are ordered and labelled,
   but `fantasy` still receives one system prompt, so only prefix ordering
-  (not per-block cache breakpoints) is realised.
-- UI surface for the permission mode: the `--permission-mode` flag and
-  `permissions.mode` work (including the client-server path), but there is no
-  in-TUI mode switcher yet.
+  (not per-block cache breakpoints) is realised. Fixing this needs a fantasy
+  change (multiple system messages with per-block cache metadata), not a
+  local one.
+- The in-TUI permission-mode switcher cycles modes and persists
+  `permissions.mode`, but it is a command-palette action rather than a
+  status-bar indicator; the status bar still shows YOLO only.
+- `MessageDisplay` is observational: it can add context and observe, but it
+  cannot rewrite the text the TUI renders.

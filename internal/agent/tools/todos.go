@@ -27,6 +27,7 @@ type TodoItem struct {
 type TodosResponseMetadata struct {
 	IsNew         bool           `json:"is_new"`
 	Todos         []session.Todo `json:"todos"`
+	JustAdded     []string       `json:"just_added,omitempty"`
 	JustCompleted []string       `json:"just_completed,omitempty"`
 	JustStarted   string         `json:"just_started,omitempty"`
 	Completed     int            `json:"completed"`
@@ -63,6 +64,7 @@ func NewTodosTool(sessions session.Service) fantasy.AgentTool {
 			}
 
 			todos := make([]session.Todo, len(params.Todos))
+			var justAdded []string
 			var justCompleted []string
 			var justStarted string
 			completedCount := 0
@@ -76,6 +78,10 @@ func NewTodosTool(sessions session.Service) fantasy.AgentTool {
 
 				newStatus := session.TodoStatus(item.Status)
 				oldStatus, existed := oldStatusByContent[item.Content]
+
+				if !existed {
+					justAdded = append(justAdded, item.Content)
+				}
 
 				if newStatus == session.TodoStatusCompleted {
 					completedCount++
@@ -123,6 +129,7 @@ func NewTodosTool(sessions session.Service) fantasy.AgentTool {
 			metadata := TodosResponseMetadata{
 				IsNew:         isNew,
 				Todos:         todos,
+				JustAdded:     justAdded,
 				JustCompleted: justCompleted,
 				JustStarted:   justStarted,
 				Completed:     completedCount,
