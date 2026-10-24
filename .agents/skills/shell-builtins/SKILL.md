@@ -7,34 +7,27 @@ description: Use when creating a new shell builtin command for Crush (internal/s
 
 Crush's shell (`internal/shell/`) uses `mvdan.cc/sh/v3` for POSIX shell
 emulation. Commands can be intercepted before they reach the OS by adding
-**builtins** — functions handled in-process.
+**builtins** (functions handled in-process).
 
 ## How Builtins Work
 
-Builtins live in `builtinHandler()` in `internal/shell/run.go`. This is an
-`interp.ExecHandlerFunc` middleware registered in `standardHandlers()`
-**before** the block handler, so builtins run even for commands that would
-otherwise be blocked. The same handler chain is shared by the stateful
+Builtins are registered in the package-level registry in
+`internal/shell/builtins_registry.go` via `shell.RegisterBuiltin`. The
+`builtinHandler()` middleware in `internal/shell/run.go` dispatches them. It is
+an `interp.ExecHandlerFunc` middleware registered in `standardHandlers()`
+**before** the block and exec handlers, so builtins run even for commands that
+would otherwise be blocked. The same handler chain is shared by the stateful
 `Shell` type and the stateless `Run` entrypoint used by the hook runner,
 so builtins are available identically in the `bash` tool and in hooks.
 
-The handler is a switch on `args[0]`. Each case either handles the command
-inline or delegates to a helper function.
+`jq` registers itself in `builtins_registry.go`'s `init`; the config builtins
+are registered by `internal/shellconfig` to avoid an import cycle.
 
 ## Adding a New Builtin
 
-1. **Add the case** to the switch in `builtinHandler()` in `run.go`.
-2. **Get I/O from the handler context**, not from `os.Stdin`/`os.Stdout`.
-   This ensures the builtin works with pipes and redirections:
-   ```go
-   case "mycommand":
-       hc := interp.HandlerCtx(ctx)
-       return handleMyCommand(ctx, args, hc.Stdin, hc.Stdout, hc.Stderr)
-   ```
-3. **Implement the handler** in its own file (e.g.,
-   `internal/shell/mycommand.go`). The function signature must accept a
-   `context.Context` as the first parameter, plus args, stdin, stdout, and
-   stderr:
+1. **Implement the handler** in its own file (e.g.,
+   `internal/shell/mycommand.go`). It must match `BuiltinHandler`: a
+   `context.Context` first parameter, then args, stdin, stdout, and stderr.
    ```go
    func handleMyCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
        // args[0] is the command name ("mycommand"), args[1:] are arguments.
@@ -42,6 +35,13 @@ inline or delegates to a helper function.
        // Return nil on success, or interp.ExitStatus(n) for non-zero exit codes.
    }
    ```
+2. **Register it** with `RegisterBuiltin("mycommand", handleMyCommand)` during
+   `init` (use `shell.RegisterBuiltin` when registering from another package,
+   as `internal/shellconfig/register.go` does).
+3. **Use the provided I/O streams**, never `os.Stdin`/`os.Stdout`. The
+   dispatcher fills stdin/stdout/stderr from `interp.HandlerCtx(ctx)`, which
+   keeps pipes and redirections working. Read from `stdin` and write to
+   `stdout`/`stderr` directly.
 4. **Poll `ctx` in every unbounded loop.** Builtins that iterate over
    input, emit values in a generator-style loop, or do any other work
    that can exceed a few milliseconds MUST check `ctx.Err()` on each
@@ -62,11 +62,12 @@ inline or delegates to a helper function.
 5. **Return values**: return `nil` for success, `interp.ExitStatus(n)` for
    non-zero exit codes, or `ctx.Err()` on cancellation. Write error
    messages to `stderr` before returning.
-6. **No extra wiring needed** — `builtinHandler()` is already registered
-   in `standardHandlers()`.
+6. **No extra wiring needed**: `builtinHandler()` already dispatches every
+   registered builtin before the block and exec handlers.
 
 ## Existing Builtins
 
 | Command | File | Description |
 |---------|------|-------------|
 | `jq` | `jq.go` | JSON processor using `github.com/itchyny/gojq` |
+| `provider`, `model`, `mcp`, `lsp`, `db`, `permissions`, `hook`, `option` | `internal/shellconfig/register.go` | Config builtins; no-ops without a `ConfigBuilder` on the context |

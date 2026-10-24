@@ -120,8 +120,8 @@ Key interface locations:
 
 ### Tool Renderers
 
-Each tool has a dedicated renderer in `chat/`. The `ToolRenderer` interface
-requires:
+Many tools have a dedicated renderer in `chat/`; unmapped tools fall back to the
+generic renderer. The `ToolRenderer` interface requires:
 
 ```go
 RenderTool(sty *styles.Styles, width int, opts *ToolRenderOpts) string
@@ -130,21 +130,29 @@ RenderTool(sty *styles.Styles, width int, opts *ToolRenderOpts) string
 `NewToolMessageItem` in `chat/tools.go` is the central factory that routes
 tool names to specific types:
 
-| File                  | Tools rendered                                 |
-| --------------------- | ---------------------------------------------- |
-| `chat/bash.go`        | Bash, JobOutput, JobKill                       |
-| `chat/file.go`        | View, Write, Edit, MultiEdit, Download         |
-| `chat/search.go`      | Glob, Grep, LS, Sourcegraph                    |
-| `chat/fetch.go`       | Fetch, WebFetch, WebSearch                     |
-| `chat/agent.go`       | Agent, AgenticFetch                            |
-| `chat/diagnostics.go` | Diagnostics                                    |
-| `chat/references.go`  | References                                     |
-| `chat/lsp_restart.go` | LSPRestart                                     |
-| `chat/todos.go`       | Todos                                          |
-| `chat/mcp.go`         | MCP tools (`mcp_` prefix)                      |
-| `chat/generic.go`     | Fallback for unrecognized tools                |
-| `chat/assistant.go`   | Assistant messages (thinking, content, errors) |
-| `chat/user.go`        | User messages (input + attachments)            |
+| File                    | Tools rendered                                 |
+| ----------------------- | ---------------------------------------------- |
+| `chat/bash.go`          | Bash, JobOutput, JobKill                       |
+| `chat/verify.go`        | Verify                                         |
+| `chat/file.go`          | View, Write, Edit, MultiEdit, Download         |
+| `chat/search.go`        | Glob, Grep, LS, Sourcegraph                    |
+| `chat/fetch.go`         | Fetch, WebFetch, WebSearch                     |
+| `chat/agent.go`         | Agent, AgenticFetch                            |
+| `chat/diagnostics.go`   | Diagnostics                                    |
+| `chat/references.go`    | References                                     |
+| `chat/definition.go`    | Definition                                     |
+| `chat/call_hierarchy.go`| CallHierarchy                                  |
+| `chat/symbols.go`       | Symbols                                        |
+| `chat/rename.go`        | Rename                                         |
+| `chat/replace_symbol.go`| ReplaceSymbol                                  |
+| `chat/lsp_restart.go`   | LSPRestart                                     |
+| `chat/question.go`      | Question                                       |
+| `chat/todos.go`         | Todos                                          |
+| `chat/mcp.go`           | MCP tools (`mcp_` prefix)                      |
+| `chat/docker_mcp.go`    | Docker MCP tools                               |
+| `chat/generic.go`       | Fallback for unrecognized tools                |
+| `chat/assistant.go`     | Assistant messages (thinking, content, errors) |
+| `chat/user.go`          | User messages (input + attachments)            |
 
 ### Styling
 
@@ -192,8 +200,8 @@ box width — border and padding live *inside* it.
 
 ### Shared Context
 
-The `common.Common` struct holds `*app.App` and `*styles.Styles`. Thread it
-through all components that need access to app state or styles.
+The `common.Common` struct holds a `workspace.Workspace` and `*styles.Styles`.
+Thread it through all components that need access to workspace state or styles.
 
 ## File Organization
 
@@ -218,7 +226,7 @@ through all components that need access to app state or styles.
 
 - Always account for padding/borders in width calculations.
 - Use `tea.Batch()` when returning multiple commands.
-- Pass `*common.Common` to components that need styles or app access.
+- Pass `*common.Common` to components that need styles or workspace access.
 - When writing tea.Cmd's prefer creating methods in the model instead of writing inline functions.
 - The `list.List` only renders visible items (lazy). No render cache exists
   at the list level — items should cache internally if rendering is
