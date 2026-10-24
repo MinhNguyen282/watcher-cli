@@ -855,12 +855,10 @@
         },
         "reasoning_effort": {
           "type": "string",
-          "enum": [
-            "low",
-            "medium",
+          "description": "Reasoning effort level for models that support it. Accepted values depend on the model; DeepSeek accepts low/high/max/none",
+          "examples": [
             "high"
-          ],
-          "description": "Reasoning effort level for OpenAI models that support it"
+          ]
         },
         "think": {
           "type": "boolean",

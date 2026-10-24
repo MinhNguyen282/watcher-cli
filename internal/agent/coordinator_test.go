@@ -634,6 +634,57 @@ func TestGetProviderOptionsReasoningEffortFallback(t *testing.T) {
 	assert.Equal(t, "enabled", thinking["type"])
 }
 
+func TestGetProviderOptionsDeepSeekEffort(t *testing.T) {
+	tests := []struct {
+		effort  string
+		enabled bool
+	}{
+		{"low", true},
+		{"high", true},
+		{"max", true},
+		{"none", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.effort, func(t *testing.T) {
+			model := Model{
+				CatwalkCfg: catwalk.Model{
+					ID:                     "deepseek-flash",
+					CanReason:              true,
+					ReasoningLevels:        []string{"low", "high", "max", "none"},
+					DefaultReasoningEffort: "high",
+				},
+				ModelCfg: config.SelectedModel{
+					Provider:        "deepseek",
+					Model:           "deepseek-flash",
+					ReasoningEffort: tc.effort,
+				},
+			}
+			providerCfg := config.ProviderConfig{
+				ID:   string(catwalk.InferenceProviderDeepSeek),
+				Type: openaicompat.Name,
+			}
+
+			opts := getProviderOptions(model, providerCfg)
+
+			raw, ok := opts[openaicompat.Name]
+			require.True(t, ok)
+			parsed, ok := raw.(*openaicompat.ProviderOptions)
+			require.True(t, ok)
+
+			thinking, ok := parsed.ExtraBody["thinking"].(map[string]any)
+			require.True(t, ok)
+			if !tc.enabled {
+				require.Nil(t, parsed.ReasoningEffort)
+				assert.Equal(t, "disabled", thinking["type"])
+				return
+			}
+			require.NotNil(t, parsed.ReasoningEffort)
+			assert.Equal(t, tc.effort, string(*parsed.ReasoningEffort))
+			assert.Equal(t, "enabled", thinking["type"])
+		})
+	}
+}
+
 func TestGetProviderOptionsTopKExtraBody(t *testing.T) {
 	// "ollama" has a registered discover.Enricher, so it is treated as a
 	// known custom provider speaking openai-compat.

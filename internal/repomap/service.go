@@ -21,6 +21,14 @@ const (
 	DefaultMaxSectionBytes = 8_000
 )
 
+// fileFragment caches the parse result for one file so an edit only
+// reparses that file instead of the whole repository.
+type fileFragment struct {
+	info    FileInfo
+	symbols map[string]Symbol
+	edges   []Edge
+}
+
 // Service builds, caches, and queries the repository map.
 type Service struct {
 	root            string
@@ -28,8 +36,12 @@ type Service struct {
 	maxSymbols      int
 	maxSectionBytes int
 
-	mu    sync.RWMutex
-	graph *Graph
+	mu          sync.RWMutex
+	graph       *Graph
+	fragments   map[string]*fileFragment
+	globalEdges []Edge
+
+	buildMu sync.Mutex
 }
 
 // New returns a repository map service for root. The cache lives under
@@ -43,68 +55,60 @@ func New(root string) *Service {
 	}
 }
 
-// Build walks and parses the repository into a fresh graph.
+// Build walks and parses the repository. Files whose stamp did not
+// change since the previous build are reused.
 func (s *Service) Build(ctx context.Context) (*Graph, error) {
-	files, err := walkRepo(s.root)
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+
+	g, err := s.buildLocked(ctx)
 	if err != nil {
 		return nil, err
 	}
-	g := NewGraph(s.root)
-	g.BuiltAt = time.Now()
-
-	// Detect the Go module path for canonical package IDs.
-	if data, err := os.ReadFile(filepath.Join(s.root, "go.mod")); err == nil {
-		if mf, err := modfile.Parse("go.mod", data, nil); err == nil && mf.Module != nil {
-			g.ModPath = mf.Module.Mod.Path
-		}
+	if err := s.saveCache(g); err != nil {
+		slog.Warn("Failed to cache repository map", "error", err)
 	}
-
-	for _, f := range files {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		data, err := readRepoFile(s.root, f.Path)
-		if err != nil {
-			continue
-		}
-		g.Languages[f.Language]++
-		g.Files = append(g.Files, f)
-		switch f.Language {
-		case "go":
-			g.parseGoFile(s.root, f.Path, data)
-		default:
-			g.parseFallbackFile(s.root, f.Path, data)
-		}
-	}
-	g.finalize()
-
-	s.mu.Lock()
-	s.graph = g
-	s.mu.Unlock()
 	return g, nil
 }
 
-// Load returns the cached graph when the repository did not change,
-// otherwise it rebuilds. It never returns an error for an unindexable
-// repository: an empty graph is returned instead, because the map is a
-// navigation aid, not a hard dependency.
+// Load returns the current graph, revalidating the on-disk inventory
+// first. Unchanged repositories keep the same *Graph pointer; edits
+// reparse only the changed files. It never returns an error for an
+// unindexable repository: an empty graph is returned instead, because
+// the map is a navigation aid, not a hard dependency.
 func (s *Service) Load(ctx context.Context) (*Graph, error) {
 	s.mu.RLock()
 	g := s.graph
 	s.mu.RUnlock()
-	if g != nil {
+	if g != nil && s.current(g) {
 		return g, nil
 	}
 
-	cached, err := s.loadCache()
-	if err == nil && cached != nil && s.current(cached) {
-		s.mu.Lock()
-		s.graph = cached
-		s.mu.Unlock()
-		return cached, nil
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+
+	// Another caller may have refreshed the map while we waited.
+	s.mu.RLock()
+	g = s.graph
+	s.mu.RUnlock()
+	if g != nil && s.current(g) {
+		return g, nil
 	}
 
-	built, err := s.Build(ctx)
+	if g == nil {
+		cached, err := s.loadCache()
+		if err == nil && cached != nil && s.current(cached) {
+			fragments, global := fragmentsFromGraph(cached)
+			s.mu.Lock()
+			s.graph = cached
+			s.fragments = fragments
+			s.globalEdges = global
+			s.mu.Unlock()
+			return cached, nil
+		}
+	}
+
+	built, err := s.buildLocked(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -112,6 +116,89 @@ func (s *Service) Load(ctx context.Context) (*Graph, error) {
 		slog.Warn("Failed to cache repository map", "error", err)
 	}
 	return built, nil
+}
+
+// buildLocked performs an incremental build. The caller holds buildMu.
+func (s *Service) buildLocked(ctx context.Context) (*Graph, error) {
+	files, err := walkRepo(s.root)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	previous := s.fragments
+	global := append([]Edge(nil), s.globalEdges...)
+	if previous == nil && s.graph != nil {
+		previous, global = fragmentsFromGraph(s.graph)
+	}
+	s.mu.RUnlock()
+
+	modPath := readModPath(s.root)
+	fragments := make(map[string]*fileFragment, len(files))
+	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if old, ok := previous[file.Path]; ok && old != nil && old.info.Stamp == file.Stamp {
+			old.info = file
+			fragments[file.Path] = old
+			continue
+		}
+		fragments[file.Path] = s.parseFile(file, modPath)
+	}
+
+	g := NewGraph(s.root)
+	g.ModPath = modPath
+	g.BuiltAt = time.Now()
+	for _, file := range files {
+		fragment := fragments[file.Path]
+		if fragment == nil {
+			continue
+		}
+		g.Files = append(g.Files, file)
+		g.Languages[file.Language]++
+		for id, symbol := range fragment.symbols {
+			g.Symbols[id] = symbol
+		}
+		g.Edges = append(g.Edges, fragment.edges...)
+	}
+	g.Edges = append(g.Edges, global...)
+	g.finalize()
+
+	s.mu.Lock()
+	s.graph = g
+	s.fragments = fragments
+	s.globalEdges = global
+	s.mu.Unlock()
+	return g, nil
+}
+
+// parseFile parses one file into a standalone fragment.
+func (s *Service) parseFile(file FileInfo, modPath string) *fileFragment {
+	fragment := &fileFragment{
+		info:    file,
+		symbols: make(map[string]Symbol),
+	}
+	data, err := readRepoFile(s.root, file.Path)
+	if err != nil {
+		return fragment
+	}
+
+	g := NewGraph(s.root)
+	g.ModPath = modPath
+	switch file.Language {
+	case "go":
+		g.parseGoFile(s.root, file.Path, data)
+	default:
+		g.parseFallbackFile(s.root, file.Path, data)
+	}
+	for id, symbol := range g.Symbols {
+		if symbol.File == file.Path {
+			fragment.symbols[id] = symbol
+		}
+	}
+	fragment.edges = g.Edges
+	return fragment
 }
 
 // current reports whether the cached graph matches the files on disk,
@@ -136,6 +223,57 @@ func (s *Service) current(cached *Graph) bool {
 	return true
 }
 
+// fragmentsFromGraph reconstructs per-file fragments from a cached
+// graph so the first edit after a cold start is still incremental.
+func fragmentsFromGraph(g *Graph) (map[string]*fileFragment, []Edge) {
+	fragments := make(map[string]*fileFragment, len(g.Files))
+	for i := range g.Files {
+		file := g.Files[i]
+		fragments[file.Path] = &fileFragment{
+			info:    file,
+			symbols: make(map[string]Symbol),
+		}
+	}
+	for id, symbol := range g.Symbols {
+		if fragment := fragments[symbol.File]; fragment != nil {
+			fragment.symbols[id] = symbol
+		}
+	}
+
+	var global []Edge
+	for _, edge := range g.Edges {
+		owner := edgeOwner(g, edge)
+		if fragment := fragments[owner]; fragment != nil {
+			fragment.edges = append(fragment.edges, edge)
+			continue
+		}
+		global = append(global, edge)
+	}
+	return fragments, global
+}
+
+func edgeOwner(g *Graph, edge Edge) string {
+	if strings.HasPrefix(edge.From, "file:") {
+		return strings.TrimPrefix(edge.From, "file:")
+	}
+	if symbol, ok := g.Symbols[edge.From]; ok {
+		return symbol.File
+	}
+	return ""
+}
+
+func readModPath(root string) string {
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	mf, err := modfile.Parse("go.mod", data, nil)
+	if err != nil || mf.Module == nil {
+		return ""
+	}
+	return mf.Module.Mod.Path
+}
+
 func (s *Service) loadCache() (*Graph, error) {
 	data, err := os.ReadFile(s.cachePath)
 	if err != nil {
@@ -144,6 +282,9 @@ func (s *Service) loadCache() (*Graph, error) {
 	var g Graph
 	if err := json.Unmarshal(data, &g); err != nil {
 		return nil, fmt.Errorf("failed to parse repository map cache: %w", err)
+	}
+	for i := range g.Files {
+		g.Files[i].HasTests = IsTestFile(g.Files[i].Path)
 	}
 	g.finalize()
 	return &g, nil

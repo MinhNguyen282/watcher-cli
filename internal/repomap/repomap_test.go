@@ -2,6 +2,7 @@ package repomap
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -195,4 +196,137 @@ func TestPromptSectionBounded(t *testing.T) {
 
 	// An empty graph renders no section.
 	require.Empty(t, svc.PromptSection(NewGraph(t.TempDir())))
+}
+
+func TestLoadRefreshesAfterEdit(t *testing.T) {
+	t.Parallel()
+	dir := buildFixture(t)
+	svc := New(dir)
+
+	g1, err := svc.Load(t.Context())
+	require.NoError(t, err)
+	require.NotContains(t, g1.Symbols, "example.com/app/service.Added")
+
+	path := filepath.Join(dir, "service", "user.go")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, append(data, []byte("\nfunc Added() {}\n")...), 0o644))
+
+	g2, err := svc.Load(t.Context())
+	require.NoError(t, err)
+	require.NotSame(t, g1, g2, "an edit must invalidate the in-memory graph")
+	require.Contains(t, g2.Symbols, "example.com/app/service.Added")
+}
+
+func TestIncrementalBuildReusesUnchangedFragments(t *testing.T) {
+	t.Parallel()
+	dir := buildFixture(t)
+	svc := New(dir)
+
+	_, err := svc.Load(t.Context())
+	require.NoError(t, err)
+
+	svc.mu.RLock()
+	userBefore := svc.fragments["service/user.go"]
+	mainBefore := svc.fragments["main.go"]
+	svc.mu.RUnlock()
+	require.NotNil(t, userBefore)
+	require.NotNil(t, mainBefore)
+
+	path := filepath.Join(dir, "main.go")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, append(data, []byte("\nfunc extra() {}\n")...), 0o644))
+
+	_, err = svc.Load(t.Context())
+	require.NoError(t, err)
+
+	svc.mu.RLock()
+	userAfter := svc.fragments["service/user.go"]
+	mainAfter := svc.fragments["main.go"]
+	svc.mu.RUnlock()
+
+	require.Same(t, userBefore, userAfter, "unchanged files must reuse their fragment")
+	require.NotSame(t, mainBefore, mainAfter, "the edited file must be reparsed")
+}
+
+func TestHasTestsAndTestsFor(t *testing.T) {
+	t.Parallel()
+	dir := buildFixture(t)
+	write := func(rel, content string) {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	}
+	write("service/user_test.go", "package service\n\nimport \"testing\"\n\nfunc TestUser(t *testing.T) {}\n")
+
+	svc := New(dir)
+	g, err := svc.Build(t.Context())
+	require.NoError(t, err)
+
+	var info FileInfo
+	for _, f := range g.Files {
+		if f.Path == "service/user_test.go" {
+			info = f
+		}
+	}
+	require.True(t, info.HasTests, "test files must be marked")
+	require.Equal(t, []string{"service/user_test.go"}, g.TestsFor([]string{"service/user.go"}))
+	require.Equal(t, []string{"service/user_test.go"}, g.TestsFor([]string{"example.com/app/service.Fetch"}))
+}
+
+func TestIsTestFile(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"service/user_test.go":      true,
+		"service/user.go":           false,
+		"web/Widget.test.ts":        true,
+		"web/Widget.ts":             false,
+		"web/__tests__/Widget.tsx":  true,
+		"tests/test_api.py":         true,
+		"src/api_test.py":           true,
+		"src/api.py":                false,
+		"crates/core/tests/api.rs":  true,
+		"crates/core/src/lib.rs":    false,
+		"node_modules/pkg/index.js": false,
+		"internal/repomap/walk.go":  false,
+	}
+	for path, want := range cases {
+		require.Equal(t, want, IsTestFile(path), path)
+	}
+}
+
+func TestGitignoreIsRespected(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	run("init", "-q")
+
+	write := func(rel, content string) {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	}
+	write(".gitignore", "generated/\n")
+	write("go.mod", "module example.com/ignored\n\ngo 1.27\n")
+	write("main.go", "package main\n\nfunc main() {}\n")
+	write("generated/gen.go", "package generated\n\nfunc Generated() {}\n")
+
+	svc := New(dir)
+	g, err := svc.Build(t.Context())
+	require.NoError(t, err)
+
+	for _, f := range g.Files {
+		require.NotContains(t, f.Path, "generated/")
+	}
+	require.Contains(t, g.Symbols, "example.com/ignored.main")
 }

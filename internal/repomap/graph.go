@@ -1,6 +1,7 @@
 package repomap
 
 import (
+	"path"
 	"sort"
 	"strings"
 )
@@ -127,6 +128,100 @@ func (g *Graph) lookupName(name string) []string {
 		}
 	}
 	return out
+}
+
+// TestsFor returns test files that conventionally cover the targets.
+// Targets may be file paths, symbol IDs, symbol names, or directory
+// prefixes.
+func (g *Graph) TestsFor(targets []string) []string {
+	files := make(map[string]FileInfo, len(g.Files))
+	for _, f := range g.Files {
+		files[f.Path] = f
+	}
+
+	resolved := make(map[string]bool)
+	resolve := func(p string) {
+		p = strings.TrimPrefix(strings.ReplaceAll(p, "\\", "/"), "./")
+		if p != "" {
+			resolved[p] = true
+		}
+	}
+	for _, target := range targets {
+		target = strings.TrimPrefix(strings.ReplaceAll(strings.TrimSpace(target), "\\", "/"), "./")
+		if target == "" {
+			continue
+		}
+		if _, ok := files[target]; ok {
+			resolve(target)
+			continue
+		}
+		matched := false
+		for _, symbol := range g.Symbols {
+			if symbol.ID == target || symbol.Name == target || symbol.Package == target {
+				resolve(symbol.File)
+				matched = true
+			}
+		}
+		if matched {
+			continue
+		}
+		prefix := strings.TrimSuffix(target, "/") + "/"
+		for file := range files {
+			if strings.HasPrefix(file, prefix) {
+				resolve(file)
+			}
+		}
+	}
+
+	tests := make(map[string]bool)
+	for file := range resolved {
+		if IsTestFile(file) {
+			tests[file] = true
+			continue
+		}
+		for _, candidate := range g.Files {
+			if candidate.HasTests && coversTest(file, candidate) {
+				tests[candidate.Path] = true
+			}
+		}
+	}
+
+	out := make([]string, 0, len(tests))
+	for file := range tests {
+		out = append(out, file)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func coversTest(source string, test FileInfo) bool {
+	dir := path.Dir(source)
+	stem := strings.TrimSuffix(path.Base(source), path.Ext(source))
+	testDir := path.Dir(test.Path)
+	testBase := path.Base(test.Path)
+
+	switch test.Language {
+	case "go":
+		return testDir == dir
+	case "js":
+		if testDir == dir {
+			return strings.HasPrefix(testBase, stem+".") &&
+				(strings.Contains(testBase, ".test.") || strings.Contains(testBase, ".spec."))
+		}
+		if path.Base(testDir) == "__tests__" {
+			return strings.HasPrefix(testBase, stem+".") ||
+				strings.HasPrefix(testBase, stem+"-") ||
+				strings.HasPrefix(testBase, "test-"+stem)
+		}
+	case "py":
+		inTestDir := testDir == dir || testDir == "tests" || strings.HasSuffix(testDir, "/tests")
+		return inTestDir && (testBase == "test_"+stem+".py" ||
+			testBase == stem+"_test.py" ||
+			strings.HasPrefix(testBase, "test_"+stem))
+	case "rs":
+		return testDir == dir || strings.Contains("/"+test.Path+"/", "/tests/")
+	}
+	return false
 }
 
 // RelatedFiles returns files that share edges with the given file.

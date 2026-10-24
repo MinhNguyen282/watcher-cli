@@ -10,6 +10,7 @@
 package repomap
 
 import (
+	"path"
 	"strings"
 	"time"
 )
@@ -114,6 +115,29 @@ func (g *Graph) finalize() {
 		add(g.adjOut, e.From, e.To, e.Kind)
 		add(g.adjIn, e.To, e.From, e.Kind)
 	}
+}
+
+// IsTestFile reports whether p uses a conventional test-file name.
+func IsTestFile(p string) bool {
+	p = strings.TrimPrefix(strings.ReplaceAll(p, "\\", "/"), "./")
+	base := strings.ToLower(path.Base(p))
+	dir := strings.ToLower(path.Dir(p))
+
+	switch path.Ext(base) {
+	case ".go":
+		return strings.HasSuffix(base, "_test.go")
+	case ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs":
+		if strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") {
+			return true
+		}
+		return dir == "__tests__" || strings.HasSuffix(dir, "/__tests__")
+	case ".py":
+		return strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py")
+	case ".rs":
+		return strings.HasSuffix(base, "_test.rs") ||
+			strings.Contains("/"+p+"/", "/tests/")
+	}
+	return false
 }
 
 // languageFor maps a file extension to an index language tag.

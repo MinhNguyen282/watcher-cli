@@ -2569,6 +2569,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			cmds = append(cmds, util.ReportWarn("Agent is busy, please wait..."))
 			break
 		}
+		m.dialog.CloseDialog(dialog.CommandsID)
 
 		cfg := m.com.Config()
 		if cfg == nil {
@@ -2584,6 +2585,9 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 
 		currentModel := cfg.Models[agentCfg.Model]
 		currentModel.ReasoningEffort = msg.Effort
+		if msg.Effort == "none" || msg.Effort == "off" {
+			currentModel.Think = false
+		}
 		if err := m.com.Workspace.UpdatePreferredModel(config.ScopeGlobal, agentCfg.Model, currentModel); err != nil {
 			cmds = append(cmds, util.ReportError(err))
 			break

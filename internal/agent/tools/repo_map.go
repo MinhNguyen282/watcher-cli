@@ -18,9 +18,9 @@ const RepoMapToolName = "repo_map"
 
 // RepoMapParams describes a repository map query.
 type RepoMapParams struct {
-	Query  string `json:"query" description:"What to look up: blast_radius, callers, callees, implementers, related, or summary"`
+	Query  string `json:"query" description:"What to look up: blast_radius, impact, callers, callees, implementers, related, tests_for, or summary"`
 	Target string `json:"target" description:"A file path, symbol name, or symbol ID to look up"`
-	Depth  int    `json:"depth" description:"Blast radius depth in hops (default 2, max 5)"`
+	Depth  int    `json:"depth" description:"Blast radius or impact depth in hops (default 2, max 5)"`
 }
 
 // NewRepoMapTool returns the repository map query tool backed by the
@@ -45,6 +45,9 @@ func NewRepoMapTool(svc *repomap.Service) fantasy.AgentTool {
 			depth := params.Depth
 			if depth <= 0 {
 				depth = 2
+				if query == "impact" {
+					depth = 3
+				}
 			}
 			depth = min(depth, 5)
 
@@ -60,10 +63,21 @@ func NewRepoMapTool(svc *repomap.Service) fantasy.AgentTool {
 				return fantasy.NewTextResponse(renderSymbols("Implementers of "+target, g.Implementers(target))), nil
 			case "related":
 				return fantasy.NewTextResponse(renderFiles("Files related to "+target, g.RelatedFiles(target))), nil
+			case "tests_for":
+				return fantasy.NewTextResponse(renderFiles("Tests covering "+target, g.TestsFor([]string{target}))), nil
+			case "impact":
+				symbols, files := g.BlastRadius([]string{target}, depth)
+				var sb strings.Builder
+				sb.WriteString(renderBlastRadius(target, depth, symbols, files))
+				if tests := g.TestsFor(files); len(tests) > 0 {
+					sb.WriteString("\n")
+					sb.WriteString(renderFiles("Tests covering the affected files", tests))
+				}
+				return fantasy.NewTextResponse(sb.String()), nil
 			case "summary", "":
 				return fantasy.NewTextResponse(renderSummary(g)), nil
 			default:
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown query %q (expected blast_radius, callers, callees, implementers, related, or summary)", params.Query)), nil
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown query %q (expected blast_radius, impact, callers, callees, implementers, related, tests_for, or summary)", params.Query)), nil
 			}
 		})
 }

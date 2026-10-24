@@ -54,6 +54,16 @@ func TestConfig_ValidateReasoningEffort(t *testing.T) {
 		require.Contains(t, err.Error(), "does not support reasoning effort")
 	})
 
+	t.Run("deepseek none is accepted", func(t *testing.T) {
+		t.Parallel()
+		cfg := newConfig(catwalk.Model{
+			ID:              "deepseek-flash",
+			CanReason:       true,
+			ReasoningLevels: []string{"low", "high", "max", "none"},
+		})
+		require.NoError(t, cfg.ValidateReasoningEffort("openai", "deepseek-flash", "none"))
+	})
+
 	t.Run("unknown model errors", func(t *testing.T) {
 		t.Parallel()
 		cfg := newConfig(catwalk.Model{ID: "gpt-4o"})

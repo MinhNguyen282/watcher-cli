@@ -88,6 +88,7 @@ model add deepseek/deepseek-flash \
   --context-window 1000000 \
   --default-max-tokens 65536 \
   --can-reason true \
+  --reasoning-effort high \
   --supports-images true
 
 model large deepseek/deepseek-flash --max-tokens 65536
@@ -113,6 +114,12 @@ fast keep an 8,192-token cap. Thinking and the answer share the output budget.
 If a response is cut off, Watcher displays a token-limit warning with recovery
 steps. The context-usage percentage in the sidebar is a separate limit.
 
+DeepSeek thinking effort uses the API levels `low`, `high`, and `max`, with
+`high` as the default; `none` disables thinking. In the TUI, press `/` and
+type `efforts` to pick a level, or type `efforts low`, `efforts high`,
+`efforts max`, or `efforts none` to select one directly. For non-interactive
+runs use `watcher run --reasoning-effort low|high|max|none "..."`.
+
 Project-level `crushrc` files and workspace model selections can override global
 settings. If you already saved a DeepSeek key through onboarding, you can omit
 the `--api-key` argument and keep the credential from your existing config.
@@ -131,7 +138,8 @@ under `.crush/` by default; repository-map and harness data live under `.watcher
 
 | Capability | How to use it |
 | --- | --- |
-| Repository map | Agents receive a compact map of symbols and dependencies; the `repo_map` tool supports navigation. Go uses its parser; other supported languages use fallback scanners. |
+| Repository map | Agents receive a compact map of symbols and dependencies; the `repo_map` tool supports navigation and revalidates as files change. Go uses its parser; other supported languages use fallback scanners. |
+| Verification | The `verify` tool discovers project commands, selects packages affected by current changes, and returns structured failures. Supports Go, Node, Rust, Python, and Make projects. |
 | Local review | `watcher review`, `watcher review --staged`, or `watcher review --base main`. A static checklist runs alongside a best-effort model review. |
 | Failure watching | `watcher watch` runs a command or tails a log, detects failures, and can invoke the coding agent to fix them. Check `watcher watch --help` for options. |
 | Model roles | Configure `model large`, `model small`, and `model fast` in `crushrc`. The fast slot is used by task sub-agents and falls back to small when unset. |

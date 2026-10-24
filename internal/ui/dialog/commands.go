@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/catwalk/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/commands"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
@@ -468,7 +469,7 @@ func (c *Commands) defaultCommands() []*CommandItem {
 			selectedModel := cfg.Models[agentCfg.Model]
 
 			// Anthropic models: thinking toggle
-			if model.CanReason && len(model.ReasoningLevels) == 0 {
+			if len(model.ReasoningLevels) == 0 {
 				status := "Enable"
 				if selectedModel.Think {
 					status = "Disable"
@@ -476,12 +477,7 @@ func (c *Commands) defaultCommands() []*CommandItem {
 				commands = append(commands, NewCommandItem(c.com.Styles, "toggle_thinking", status+" Thinking Mode", "", ActionToggleThinking{}))
 			}
 
-			// OpenAI models: reasoning effort dialog
-			if len(model.ReasoningLevels) > 0 {
-				commands = append(commands, NewCommandItem(c.com.Styles, "select_reasoning_effort", "Select Reasoning Effort", "", ActionOpenDialog{
-					DialogID: ReasoningID,
-				}))
-			}
+			commands = append(commands, reasoningEffortCommands(c.com.Styles, providerCfg.ID, model)...)
 		}
 	}
 	// Only show toggle compact mode command if window width is larger than compact breakpoint (120)
@@ -571,6 +567,63 @@ func (c *Commands) defaultCommands() []*CommandItem {
 	)
 
 	return commands
+}
+
+// reasoningEffortCommands builds the reasoning effort entries for the
+// active model. DeepSeek models also get direct /efforts low|high|max|none
+// shortcuts.
+func reasoningEffortCommands(sty *styles.Styles, providerID string, model *catwalk.Model) []*CommandItem {
+	if model == nil || !model.CanReason || len(model.ReasoningLevels) == 0 {
+		return nil
+	}
+	items := []*CommandItem{
+		NewCommandItem(sty, "select_reasoning_effort", "Select Reasoning Effort", "", ActionOpenDialog{
+			DialogID: ReasoningID,
+		}).WithAliases("efforts", "effort", "thinking effort"),
+	}
+	if !isDeepSeekModel(providerID, model.ID) {
+		return items
+	}
+	for _, effort := range model.ReasoningLevels {
+		name := strings.ToLower(strings.TrimSpace(effort))
+		if name == "" || name == "off" {
+			continue
+		}
+		if name == "none" {
+			items = append(items, NewCommandItem(
+				sty,
+				"disable_thinking",
+				"Disable Thinking",
+				"",
+				ActionSelectReasoningEffort{Effort: effort},
+			).WithAliases(
+				"efforts none",
+				"effort none",
+				"deepseek none",
+				"thinking off",
+			).WithDescription("Disable DeepSeek thinking mode"))
+			continue
+		}
+		items = append(items, NewCommandItem(
+			sty,
+			"effort_"+name,
+			"Set Effort: "+common.FormatReasoningEffort(effort),
+			"",
+			ActionSelectReasoningEffort{Effort: effort},
+		).WithAliases(
+			"efforts "+name,
+			"effort "+name,
+			"deepseek "+name,
+			"thinking "+name,
+		).WithDescription("DeepSeek thinking effort"))
+	}
+	return items
+}
+
+func isDeepSeekModel(providerID, modelID string) bool {
+	provider := strings.ToLower(providerID)
+	model := strings.ToLower(modelID)
+	return strings.Contains(provider, "deepseek") || strings.Contains(model, "deepseek")
 }
 
 // SetCustomCommands sets the custom commands and refreshes the view if user commands are currently displayed.

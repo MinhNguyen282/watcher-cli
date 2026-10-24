@@ -664,7 +664,9 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.
 		extraBody := make(map[string]any)
 
 		_, hasReasoningEffort := mergedOptions["reasoning_effort"]
-		if !hasReasoningEffort && shouldSetEffort {
+		thinkingOff := providerCfg.ID == string(catwalk.InferenceProviderDeepSeek) &&
+			(reasoningEffort == "none" || reasoningEffort == "off")
+		if !hasReasoningEffort && shouldSetEffort && !thinkingOff {
 			switch providerCfg.ID {
 			case string(catwalk.InferenceProviderIoNet):
 				extraBody["reasoning"] = map[string]string{"effort": reasoningEffort}
@@ -696,7 +698,17 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.
 				}
 			}
 
-		case string(catwalk.InferenceProviderZAI), string(catwalk.InferenceProviderDeepSeek):
+		case string(catwalk.InferenceProviderDeepSeek):
+			if reasoningEffort == "none" || reasoningEffort == "off" {
+				delete(mergedOptions, "reasoning_effort")
+				extraBody["thinking"] = map[string]any{"type": "disabled"}
+			} else if model.ModelCfg.Think || reasoningEffort != "" {
+				extraBody["thinking"] = map[string]any{"type": "enabled"}
+			} else {
+				extraBody["thinking"] = map[string]any{"type": "disabled"}
+			}
+
+		case string(catwalk.InferenceProviderZAI):
 			if model.ModelCfg.Think || reasoningEffort != "" {
 				extraBody["thinking"] = map[string]any{"type": "enabled"}
 			} else {
@@ -930,6 +942,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	allTools = append(
 		allTools,
 		tools.NewBashTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Options.DataDirectory, c.cfg.Config().Options.Attribution, modelID, c.cfg.Config().Options.GetMaxBackgroundJobs()),
+		tools.NewVerifyTool(c.permissions, c.cfg.WorkingDir(), c.repoMap),
 		tools.NewCrushInfoTool(c.cfg, c.lspManager, c.allSkills, c.activeSkills, c.skillTracker),
 		tools.NewCrushLogsTool(logFile),
 		tools.NewJobOutputTool(c.cfg.Config().Options.DataDirectory),

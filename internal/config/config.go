@@ -75,8 +75,8 @@ type SelectedModel struct {
 	// Required.
 	Provider string `json:"provider" jsonschema:"required,description=The model provider ID that matches a key in the providers config,example=openai"`
 
-	// Only used by models that use the openai provider and need this set.
-	ReasoningEffort string `json:"reasoning_effort,omitempty" jsonschema:"description=Reasoning effort level for OpenAI models that support it,enum=low,enum=medium,enum=high"`
+	// Used by models that expose named reasoning effort levels.
+	ReasoningEffort string `json:"reasoning_effort,omitempty" jsonschema:"description=Reasoning effort level for models that support it. Accepted values depend on the model; DeepSeek accepts low/high/max/none,example=high"`
 
 	// Used by anthropic models that can reason to indicate if the model should think.
 	Think bool `json:"think,omitempty" jsonschema:"description=Enable thinking mode for Anthropic models that support reasoning"`
@@ -1088,6 +1088,7 @@ func allToolNames() []string {
 		"repo_map",
 		"sourcegraph",
 		"todos",
+		"verify",
 		"view",
 		"write",
 		"list_mcp_resources",

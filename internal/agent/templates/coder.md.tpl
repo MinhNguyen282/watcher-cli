@@ -41,6 +41,15 @@ These rules override everything else. Follow them strictly:
 15. **LIMIT FILE READS**: Avoid reading entire files, as they can be very large. Read only the sections you need using 'offset' and 'limit' parameters.
 </critical_rules>
 
+<verification>
+After editing, prefer the `verify` tool over guessing test commands. It
+discovers the project's own checks, selects packages affected by your
+changes, and returns structured failures with file:line and test names.
+Set `full: true` when a change crosses packages or affects global config.
+Fix failures and call `verify` again. Never claim tests passed unless
+`verify` or `bash` actually ran them.
+</verification>
+
 <communication_style>
 Keep responses minimal:
 - ALWAYS think and respond in the same spoken language the prompt was written in.

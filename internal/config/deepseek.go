@@ -2,6 +2,7 @@ package config
 
 import (
 	"slices"
+	"strings"
 
 	"charm.land/catwalk/pkg/catwalk"
 )
@@ -47,6 +48,7 @@ func normalizeDeepSeekCatalog(providers []catwalk.Provider) []catwalk.Provider {
 				}
 				added = true
 			}
+			model = withDeepSeekEffort(model)
 			models = append(models, model)
 		}
 		provider.Models = models
@@ -59,6 +61,30 @@ func normalizeDeepSeekCatalog(providers []catwalk.Provider) []catwalk.Provider {
 		result[i] = provider
 	}
 	return result
+}
+
+// withDeepSeekEffort applies DeepSeek's thinking-mode effort levels when
+// the catalog does not provide them. DeepSeek accepts low, high, and max,
+// with high as the documented default; none disables thinking mode.
+func withDeepSeekEffort(model catwalk.Model) catwalk.Model {
+	if !model.CanReason && !isDeepSeekReasoningModel(model.ID) {
+		return model
+	}
+	model.CanReason = true
+	if len(model.ReasoningLevels) == 0 {
+		model.ReasoningLevels = []string{"low", "high", "max", "none"}
+	}
+	if model.DefaultReasoningEffort == "" {
+		model.DefaultReasoningEffort = "high"
+	}
+	return model
+}
+
+func isDeepSeekReasoningModel(id string) bool {
+	id = strings.ToLower(id)
+	return strings.HasPrefix(id, "deepseek-flash") ||
+		strings.HasPrefix(id, "deepseek-v4") ||
+		strings.Contains(id, "reasoner")
 }
 
 func retiredDeepSeekFlash(id string) bool {

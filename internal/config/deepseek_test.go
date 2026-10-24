@@ -21,6 +21,11 @@ func TestNormalizeDeepSeekCatalog(t *testing.T) {
 	require.Equal(t, "DeepSeek V4.1 Flash", got[0].Models[0].Name)
 	require.Equal(t, int64(1_000_000), got[0].Models[0].ContextWindow)
 	require.True(t, got[0].Models[0].SupportsImages)
+	require.True(t, got[0].Models[0].CanReason)
+	require.Equal(t, []string{"low", "high", "max", "none"}, got[0].Models[0].ReasoningLevels)
+	require.Equal(t, "high", got[0].Models[0].DefaultReasoningEffort)
+	require.Equal(t, []string{"low", "high", "max", "none"}, got[0].Models[1].ReasoningLevels)
+	require.Equal(t, "high", got[0].Models[1].DefaultReasoningEffort)
 	require.Equal(t, source[1], got[1])
 	require.Equal(t, "deepseek-v4-flash", source[0].Models[0].ID, "Must not mutate cached/shared input")
 	require.Equal(t, got, normalizeDeepSeekCatalog(got), "Normalization must be idempotent")
@@ -31,8 +36,36 @@ func TestNormalizeDeepSeekCatalogPrefersCurrentMetadata(t *testing.T) {
 	current := catwalk.Model{ID: "deepseek-flash", Name: "Future Flash", ContextWindow: 2_000_000, CostPer1MIn: 0.1}
 	got := normalizeDeepSeekCatalog([]catwalk.Provider{{ID: catwalk.InferenceProviderDeepSeek,
 		Models: []catwalk.Model{{ID: "deepseek-v4-flash"}, current}, DefaultLargeModelID: "deepseek-v4-flash"}})
-	require.Equal(t, []catwalk.Model{current}, got[0].Models)
+	expected := current
+	expected.CanReason = true
+	expected.ReasoningLevels = []string{"low", "high", "max", "none"}
+	expected.DefaultReasoningEffort = "high"
+	require.Equal(t, []catwalk.Model{expected}, got[0].Models)
 	require.Equal(t, "deepseek-flash", got[0].DefaultLargeModelID)
+}
+
+func TestNormalizeDeepSeekCatalogPreservesExplicitEfforts(t *testing.T) {
+	t.Parallel()
+	current := catwalk.Model{
+		ID:                     "deepseek-flash",
+		CanReason:              true,
+		ReasoningLevels:        []string{"low", "max"},
+		DefaultReasoningEffort: "max",
+	}
+	got := normalizeDeepSeekCatalog([]catwalk.Provider{{ID: catwalk.InferenceProviderDeepSeek,
+		Models: []catwalk.Model{current}}})
+	require.Equal(t, []string{"low", "max"}, got[0].Models[0].ReasoningLevels)
+	require.Equal(t, "max", got[0].Models[0].DefaultReasoningEffort)
+}
+
+func TestNormalizeDeepSeekCatalogLeavesNonReasoningModels(t *testing.T) {
+	t.Parallel()
+	got := normalizeDeepSeekCatalog([]catwalk.Provider{{ID: catwalk.InferenceProviderDeepSeek,
+		Models: []catwalk.Model{{ID: "deepseek-chat"}}}})
+	model := got[0].Models[0]
+	require.False(t, model.CanReason)
+	require.Empty(t, model.ReasoningLevels)
+	require.Empty(t, model.DefaultReasoningEffort)
 }
 
 func TestResolveDeepSeekLegacySlotsStayOnFlash(t *testing.T) {
