@@ -1053,6 +1053,8 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			switch stepResult.FinishReason {
 			case fantasy.FinishReasonLength:
 				finishReason = message.FinishReasonMaxTokens
+				slog.Warn("Model reached token limit", "session_id", call.SessionID,
+					"model", largeModel.ModelCfg.Model, "max_output_tokens", call.MaxOutputTokens)
 			case fantasy.FinishReasonStop:
 				finishReason = message.FinishReasonEndTurn
 			case fantasy.FinishReasonToolCalls:

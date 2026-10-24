@@ -31,15 +31,18 @@ const assistantMessageTailWindowFormat = "… %d earlier lines hidden [click or 
 // maxCollapsedThinkingHeight defines the maximum height of the thinking
 const maxCollapsedThinkingHeight = 10
 
-// Default copy for a provider-refusal banner. The agent persists only
-// the FinishReasonContentFilter reason; the TUI owns this text and
+// Default copy for refusal and token-limit banners. The agent persists
+// the finish reason; the TUI owns this text and
 // fills it in when the finish part carries no message/details (the
 // normal live path, and restored sessions). Kept here as the single
 // source of truth so the render path and tests cannot drift apart.
 const (
-	refusalTagLabel = "REFUSED"
-	refusalTitle    = "Model refused to continue"
-	refusalDetails  = "The provider's safety classifier stopped this response before any usable content was produced. Rephrase the request, start a fresh session, or try a different model."
+	refusalTagLabel    = "REFUSED"
+	refusalTitle       = "Model refused to continue"
+	refusalDetails     = "The provider's safety classifier stopped this response before any usable content was produced. Rephrase the request, start a fresh session, or try a different model."
+	tokenLimitTagLabel = "LIMIT"
+	tokenLimitTitle    = "Token limit reached"
+	tokenLimitDetails  = "The model reached a token limit before finishing. Thinking uses the output budget too. Increase the output limit, reduce Thinking, or shorten the conversation, then retry or ask it to continue."
 )
 
 // maxExpandedThinkingTailLines is the F5 tail-window cap. When the user
@@ -544,7 +547,7 @@ func (a *AssistantMessageItem) planStreaming() bool {
 }
 
 // errorKey returns the (srcHash, extra) cache key components for the
-// error / refusal section. Returns (0, 0) when no error-like finish
+// error / refusal / limit section. Returns (0, 0) when no error-like finish
 // is present so the cache stays a no-op for normal messages.
 func (a *AssistantMessageItem) errorKey() (uint64, uint64) {
 	if !a.message.IsFinished() || !a.message.IsErrorLike() {
@@ -557,7 +560,7 @@ func (a *AssistantMessageItem) errorKey() (uint64, uint64) {
 	// Length-prefixed framing prevents Message+Details collisions
 	// between distinct (Message, Details) tuples that would
 	// otherwise concatenate to the same byte sequence. Fold the
-	// reason in so ERROR vs REFUSED banners never share a cache slot.
+	// reason in so ERROR, REFUSED and LIMIT banners never share a cache slot.
 	return fnvFields([]byte(finishPart.Reason), []byte(finishPart.Message), []byte(finishPart.Details)), 0
 }
 
@@ -774,7 +777,7 @@ func (a *AssistantMessageItem) renderSpinning() string {
 	return a.anim.Render()
 }
 
-// renderError renders an error or provider-refusal banner.
+// renderError renders an error, provider-refusal or token-limit banner.
 func (a *AssistantMessageItem) renderError(width int) string {
 	finishPart := a.message.FinishPart()
 	tagLabel := "ERROR"
@@ -784,6 +787,11 @@ func (a *AssistantMessageItem) renderError(width int) string {
 		tagLabel = refusalTagLabel
 		titleText = cmp.Or(titleText, refusalTitle)
 		detailsText = cmp.Or(detailsText, refusalDetails)
+	}
+	if finishPart.Reason == message.FinishReasonMaxTokens {
+		tagLabel = tokenLimitTagLabel
+		titleText = cmp.Or(titleText, tokenLimitTitle)
+		detailsText = cmp.Or(detailsText, tokenLimitDetails)
 	}
 	errTag := a.sty.Messages.ErrorTag.Render(tagLabel)
 	truncated := ansi.Truncate(titleText, width-2-lipgloss.Width(errTag), "...")

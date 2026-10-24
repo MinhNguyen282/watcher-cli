@@ -86,11 +86,11 @@ provider add deepseek --type openai-compat \
 model add deepseek/deepseek-flash \
   --name "DeepSeek Flash" \
   --context-window 1000000 \
-  --default-max-tokens 8192 \
+  --default-max-tokens 65536 \
   --can-reason true \
   --supports-images true
 
-model large deepseek/deepseek-flash --max-tokens 8192
+model large deepseek/deepseek-flash --max-tokens 65536
 model small deepseek/deepseek-flash --max-tokens 8192
 model fast deepseek/deepseek-flash --max-tokens 8192
 ```
@@ -100,6 +100,11 @@ the summarization model, and the task sub-agent model. The current public alias
 is `deepseek-flash`; Watcher normalizes the retired `deepseek-v4-flash` catalog
 alias and migrates saved selections while preserving Flash intent. See
 [DeepSeek's API documentation](https://api-docs.deepseek.com/) for current models.
+
+The main slot reserves a 65,536-token output budget for Thinking mode; small and
+fast keep an 8,192-token cap. Thinking and the answer share the output budget.
+If a response is cut off, Watcher displays a token-limit warning with recovery
+steps. The context-usage percentage in the sidebar is a separate limit.
 
 Project-level `crushrc` files and workspace model selections can override global
 settings. If you already saved a DeepSeek key through onboarding, you can omit
@@ -931,13 +936,13 @@ provider add deepseek --type openai-compat \
 model add deepseek/deepseek-flash \
   --name "DeepSeek V4.1 Flash" \
   --context-window 1000000 \
-  --default-max-tokens 8192 \
+  --default-max-tokens 65536 \
   --can-reason true \
   --supports-images true
 
-model large deepseek/deepseek-flash
-model small deepseek/deepseek-flash
-model fast deepseek/deepseek-flash
+model large deepseek/deepseek-flash --max-tokens 65536
+model small deepseek/deepseek-flash --max-tokens 8192
+model fast deepseek/deepseek-flash --max-tokens 8192
 ```
 
 #### Anthropic-Compatible APIs

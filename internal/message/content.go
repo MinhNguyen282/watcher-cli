@@ -278,11 +278,11 @@ func (m *Message) FinishReason() FinishReason {
 }
 
 // IsErrorLike reports whether the message finished with an error-style
-// banner (a real error or a provider safety refusal). The TUI renders
-// both through the same banner path.
+// banner (an error, provider safety refusal, or token-limit stop). The TUI
+// renders these through the same banner path.
 func (m *Message) IsErrorLike() bool {
 	switch m.FinishReason() {
-	case FinishReasonError, FinishReasonContentFilter:
+	case FinishReasonError, FinishReasonContentFilter, FinishReasonMaxTokens:
 		return true
 	}
 	return false
