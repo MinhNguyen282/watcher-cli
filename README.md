@@ -1,9 +1,178 @@
-# Crush
+# Watcher CLI
+
+Watcher is a personal fork of [Charm Crush](https://github.com/charmbracelet/crush),
+a terminal coding assistant built in Go. It adds repository maps, local code
+review, command watching, model roles, read-only database/API inspectors, and an
+optional Jev routing observer.
+
+Run `watcher` from a project directory to open a new interactive session there.
+The CLI help, configuration filenames, and Go module retain the Crush name.
+
+## Build and install Watcher
+
+Requires Git and **Go 1.27 or later**. Build this repository to get Watcher's
+additions. Rebuild and repeat the installation step after pulling updates.
+
+### Windows / PowerShell
+
+```powershell
+git clone https://github.com/MinhNguyen282/watcher-cli.git
+cd watcher-cli
+
+$env:CGO_ENABLED = '0'
+$env:GOEXPERIMENT = 'greenteagc'
+go build -o watcher.exe .
+
+$bin = Join-Path $env:USERPROFILE '.local\bin'
+New-Item -ItemType Directory -Force -Path $bin | Out-Null
+Copy-Item .\watcher.exe (Join-Path $bin 'watcher.exe') -Force
+
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (($userPath -split ';') -notcontains $bin) {
+    $newPath = (@($userPath -split ';' | Where-Object { $_ }) + $bin) -join ';'
+    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+}
+$env:Path = "$bin;$env:Path"
+```
+
+The command is available in this terminal and new terminals:
+
+```powershell
+cd C:\path\to\your-project
+watcher
+```
+
+### Linux / macOS
+
+```bash
+git clone https://github.com/MinhNguyen282/watcher-cli.git
+cd watcher-cli
+mkdir -p "$HOME/.local/bin"
+CGO_ENABLED=0 GOEXPERIMENT=greenteagc go build -o "$HOME/.local/bin/watcher" .
+export PATH="$HOME/.local/bin:$PATH"
+
+cd /path/to/your-project
+watcher
+```
+
+Add `~/.local/bin` to your shell profile's PATH for future terminals.
+
+## DeepSeek quick start
+
+Get a key from the [DeepSeek platform](https://platform.deepseek.com/). In
+PowerShell, set it for the current terminal and future processes:
+
+```powershell
+$secret = Read-Host 'DeepSeek API key' -AsSecureString
+$env:DEEPSEEK_API_KEY = [Net.NetworkCredential]::new('', $secret).Password
+[Environment]::SetEnvironmentVariable('DEEPSEEK_API_KEY', $env:DEEPSEEK_API_KEY, 'User')
+```
+
+On Linux/macOS, export `DEEPSEEK_API_KEY` through your preferred environment or
+secret manager.
+
+Create or edit `~/.config/crush/crushrc`
+(`%USERPROFILE%\.config\crush\crushrc` on Windows). These are Bash-style
+**configuration directives**, including when running Watcher in PowerShell:
+
+```bash
+# Use explicitly configured providers.
+option default-providers false
+
+provider add deepseek --type openai-compat \
+  --base-url "https://api.deepseek.com" \
+  --api-key '$DEEPSEEK_API_KEY'
+
+model add deepseek/deepseek-flash \
+  --name "DeepSeek Flash" \
+  --context-window 1000000 \
+  --default-max-tokens 8192 \
+  --can-reason true \
+  --supports-images true
+
+model large deepseek/deepseek-flash --max-tokens 8192
+model small deepseek/deepseek-flash --max-tokens 8192
+model fast deepseek/deepseek-flash --max-tokens 8192
+```
+
+All three slots now select DeepSeek Flash: the main coding/planning model,
+the summarization model, and the task sub-agent model. The current public alias
+is `deepseek-flash`; Watcher normalizes the retired `deepseek-v4-flash` catalog
+alias and migrates saved selections while preserving Flash intent. See
+[DeepSeek's API documentation](https://api-docs.deepseek.com/) for current models.
+
+Project-level `crushrc` files and workspace model selections can override global
+settings. If you already saved a DeepSeek key through onboarding, you can omit
+the `--api-key` argument and keep the credential from your existing config.
+
+```bash
+watcher models deepseek
+watcher run "Explain Go interfaces briefly. Do not edit files."
+watcher
+```
+
+The interactive command starts a new session by default. Use `watcher --continue`
+to resume the most recent session for that workspace. Project session data lives
+under `.crush/` by default; repository-map and harness data live under `.watcher/`.
+
+## Watcher tools
+
+| Capability | How to use it |
+| --- | --- |
+| Repository map | Agents receive a compact map of symbols and dependencies; the `repo_map` tool supports navigation. Go uses its parser; other supported languages use fallback scanners. |
+| Local review | `watcher review`, `watcher review --staged`, or `watcher review --base main`. A static checklist runs alongside a best-effort model review. |
+| Failure watching | `watcher watch` runs a command or tails a log, detects failures, and can invoke the coding agent to fix them. Check `watcher watch --help` for options. |
+| Model roles | Configure `model large`, `model small`, and `model fast` in `crushrc`. The fast slot is used by task sub-agents and falls back to small when unset. |
+| Database/API inspection | `db_schema`, `db_query`, and `openapi_spec` inspect configured databases and local API specifications through the existing permission flow. |
+| Jev observer | Optional structured pre-turn suggestions for intent, complexity, model tier, skill, and review needs. Observe mode leaves agent behavior unchanged. |
+
+### Database and API inspectors
+
+Declare connections in `crushrc`, using environment references for credentials:
+
+```bash
+db add app --type postgres --url '$APP_DATABASE_URL'
+db add reporting --type mysql --url '$REPORTING_MYSQL_DSN'
+```
+
+Use a dedicated read-only database account. Queries run in read-only transactions
+with a SQL guard, a five-second timeout, and bounded results. The OpenAPI tool
+reads local OpenAPI 3.x and Swagger 2.0 JSON/YAML files. See the
+[database inspector guide](docs/database-inspector.md) for syntax, limits, and tests.
+
+### Jev routing observer
+
+Set `TYPESAFE_API_KEY` in the environment of the process running the agent, then
+add this to `crushrc`:
+
+```bash
+option jev-observe true
+option jev-model jev-latest
+```
+
+Jev receives the current prompt and allowed model/skill descriptions in one
+request. Summaries and diagnostic logs expose its recommendations. Confidence
+below `0.8` recommends the current model and normal agent skill selection;
+errors/timeouts also preserve the existing behavior. The coding model still
+writes code, and tool permissions remain in force. Automatic routing and tool
+decision gates are future work. See the [Jev observer guide](docs/jev-routing.md).
+
+More documentation: [configuration](docs/config/README.md),
+[hooks](docs/hooks/README.md), and the [self-evolution harness](docs/harness.md).
+Documents under [docs/plans](docs/plans/README.md) describe roadmap proposals;
+their acceptance criteria are not release guarantees.
+
+## Upstream Crush reference
+
+The reference below is inherited from Charm Crush. Substitute `watcher` for
+`crush` when using this fork's installed executable. The logos, screenshots,
+community links, and upstream release/build badges belong to the original
+project.
 
 <p align="center">
     <a href="https://stuff.charm.sh/crush/charm-crush.png"><img width="450" alt="Charm Crush Logo" src="https://github.com/user-attachments/assets/cf8ca3ce-8b02-43f0-9d0f-5a331488da4b" /></a><br />
-    <a href="https://github.com/charmbracelet/crush/releases"><img src="https://img.shields.io/github/release/charmbracelet/crush" alt="Latest Release"></a>
-    <a href="https://github.com/charmbracelet/crush/actions"><img src="https://github.com/charmbracelet/crush/actions/workflows/build.yml/badge.svg" alt="Build Status"></a>
+    <a href="https://github.com/charmbracelet/crush/releases"><img src="https://img.shields.io/github/release/charmbracelet/crush" alt="Upstream Latest Release"></a>
+    <a href="https://github.com/charmbracelet/crush/actions"><img src="https://github.com/charmbracelet/crush/actions/workflows/build.yml/badge.svg" alt="Upstream Build Status"></a>
 </p>
 
 <p align="center">Your new coding bestie, now available in your favourite terminal.<br />Your tools, your code, and your workflows, wired into your LLM of choice.</p>
@@ -22,6 +191,10 @@
 - **Industrial Grade:** built on the Charm ecosystem, powering 25k+ applications, from leading open source projects to business-critical infrastructure
 
 ## Installation
+
+The package-manager commands in this section install the upstream Charm Crush
+distribution. Use [Build and install Watcher](#build-and-install-watcher) for
+this fork.
 
 Use a package manager:
 
