@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -83,6 +84,7 @@ crush run --evolve --no-apply "Refactor the auth module"
 			reasoningEffort, _ = cmd.Flags().GetString("reasoning-effort")
 			sessionID, _       = cmd.Flags().GetString("session")
 			useLast, _         = cmd.Flags().GetBool("continue")
+			jsonOutput, _      = cmd.Flags().GetBool("json")
 		)
 
 		// Cancel on SIGINT or SIGTERM.
@@ -156,7 +158,7 @@ crush run --evolve --no-apply "Refactor the auth module"
 				slog.SetDefault(slog.New(log.New(os.Stderr)))
 			}
 
-			return runNonInteractive(ctx, c, ws, prompt, largeModel, smallModel, fastModel, reasoningEffort, quiet || verbose, sessionID, useLast)
+			return runNonInteractive(ctx, c, ws, prompt, largeModel, smallModel, fastModel, reasoningEffort, quiet || verbose, sessionID, useLast, jsonOutput)
 		}
 
 		ws, cleanup, err := setupLocalWorkspace(cmd)
@@ -185,7 +187,7 @@ crush run --evolve --no-apply "Refactor the auth module"
 			sessionID = sess.ID
 		}
 
-		return appWs.App().RunNonInteractive(ctx, os.Stdout, prompt, largeModel, smallModel, fastModel, reasoningEffort, quiet || verbose, sessionID, useLast)
+		return appWs.App().RunNonInteractive(ctx, os.Stdout, prompt, largeModel, smallModel, fastModel, reasoningEffort, quiet || verbose, sessionID, useLast, jsonOutput)
 	},
 }
 
@@ -198,6 +200,7 @@ func init() {
 	runCmd.Flags().String("reasoning-effort", "", "Reasoning effort for the model (e.g. low, medium, high). Levels depend on the model; unsupported values are rejected with the accepted values listed")
 	runCmd.Flags().StringP("session", "s", "", "Continue a previous session by ID")
 	runCmd.Flags().BoolP("continue", "C", false, "Continue the most recent session")
+	runCmd.Flags().Bool("json", false, "Write newline-delimited JSON objects to stdout")
 	runCmd.Flags().Bool("evolve", false, "Run the self-evolving harness optimizer: probe the task, propose improved harnesses, probe them in git worktrees, and keep the winner")
 	runCmd.Flags().IntP("k", "k", 2, "Number of candidate harnesses to probe when --evolve is set")
 	runCmd.Flags().String("mode", "parallel", "Probe mode for --evolve: 'parallel' or 'sequential'")
@@ -215,7 +218,12 @@ func runNonInteractive(
 	hideSpinner bool,
 	continueSessionID string,
 	useLast bool,
+	jsonOutput ...bool,
 ) error {
+	asJSON := len(jsonOutput) > 0 && jsonOutput[0]
+	if asJSON {
+		hideSpinner = true
+	}
 	slog.Info("Running in non-interactive mode")
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -324,6 +332,7 @@ func runNonInteractive(
 		runID:     runID,
 		out:       os.Stdout,
 		read:      make(map[string]int),
+		json:      asJSON,
 	}
 
 	// Start herdr integration when running inside a herdr pane.
@@ -335,7 +344,9 @@ func runNonInteractive(
 		if progress && stderrTTY {
 			_, _ = fmt.Fprintf(os.Stderr, ansi.ResetProgressBar)
 		}
-		_, _ = fmt.Fprintln(os.Stdout)
+		if !asJSON {
+			_, _ = fmt.Fprintln(os.Stdout)
+		}
 	}()
 
 	for {
@@ -391,6 +402,17 @@ type runStream struct {
 	out       io.Writer
 	read      map[string]int
 	printed   bool
+	json      bool
+}
+
+// writeJSONLine writes one newline-delimited JSON object to the stream.
+func (s *runStream) writeJSONLine(value any) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		slog.Warn("Failed to encode run JSON", "error", err)
+		return
+	}
+	_, _ = fmt.Fprintln(s.out, string(data))
 }
 
 // handle processes one SSE event. Returns done=true when the run
@@ -430,7 +452,16 @@ func (s *runStream) handle(ev any, stopSpinner func()) (done bool, err error) {
 		}
 		if s.printed || strings.TrimSpace(part) != "" {
 			s.printed = true
-			fmt.Fprint(s.out, part)
+			if s.json {
+				s.writeJSONLine(map[string]any{
+					"type":       "assistant_delta",
+					"session_id": s.sessionID,
+					"message_id": msg.ID,
+					"content":    part,
+				})
+			} else {
+				fmt.Fprint(s.out, part)
+			}
 		}
 		s.read[msg.ID] = len(content)
 		return false, nil
@@ -476,9 +507,29 @@ func (s *runStream) handle(ev any, stopSpinner func()) (done bool, err error) {
 				}
 				if s.printed || strings.TrimSpace(tail) != "" {
 					s.printed = true
-					fmt.Fprint(s.out, tail)
+					if s.json {
+						s.writeJSONLine(map[string]any{
+							"type":       "assistant_delta",
+							"session_id": s.sessionID,
+							"message_id": e.Payload.MessageID,
+							"content":    tail,
+						})
+					} else {
+						fmt.Fprint(s.out, tail)
+					}
 				}
 			}
+		}
+		if s.json {
+			status := "completed"
+			if e.Payload.Cancelled {
+				status = "cancelled"
+			}
+			s.writeJSONLine(map[string]any{
+				"type":       "result",
+				"session_id": s.sessionID,
+				"status":     status,
+			})
 		}
 		return true, nil
 

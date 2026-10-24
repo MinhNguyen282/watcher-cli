@@ -66,6 +66,8 @@ func TestBashTool_DefaultAutoBackgroundThreshold(t *testing.T) {
 }
 
 func TestBashTool_CustomAutoBackgroundThreshold(t *testing.T) {
+	requireSleep(t)
+
 	workingDir := t.TempDir()
 	tool := newBashToolForTest(workingDir)
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")

@@ -15,10 +15,17 @@ import (
 type mockEditFileTracker struct {
 	lastRead time.Time
 	reads    []string
+	checkErr error
 }
 
 func (m *mockEditFileTracker) RecordRead(ctx context.Context, sessionID, path string) {
 	m.reads = append(m.reads, path)
+}
+
+func (m *mockEditFileTracker) RecordVersion(ctx context.Context, sessionID, path string) {}
+
+func (m *mockEditFileTracker) CheckVersion(ctx context.Context, sessionID, path string) error {
+	return m.checkErr
 }
 
 func (m *mockEditFileTracker) LastReadTime(ctx context.Context, sessionID, path string) time.Time {

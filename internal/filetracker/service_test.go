@@ -2,6 +2,8 @@ package filetracker
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -27,7 +29,7 @@ func setupTest(t *testing.T) *testEnv {
 	return &testEnv{
 		ctx: t.Context(),
 		q:   q,
-		svc: NewService(q),
+		svc: NewService(q, conn),
 	}
 }
 
@@ -97,6 +99,49 @@ func TestService_RecordRead_DifferentSessions(t *testing.T) {
 
 	lastRead2 := env.svc.LastReadTime(env.ctx, session2, path)
 	require.True(t, lastRead2.IsZero(), "session 2 should not see session 1's read")
+}
+
+func TestService_CheckVersionRejectsSameSecondRewrite(t *testing.T) {
+	env := setupTest(t)
+	sessionID := "version-session"
+	env.createSession(t, sessionID)
+
+	path := filepath.Join(t.TempDir(), "file.txt")
+	require.NoError(t, os.WriteFile(path, []byte("first"), 0o644))
+	env.svc.RecordVersion(env.ctx, sessionID, path)
+	require.NoError(t, env.svc.CheckVersion(env.ctx, sessionID, path))
+
+	// A same-size rewrite inside the same second must still be rejected:
+	// the gate compares content, not a truncated timestamp.
+	require.NoError(t, os.WriteFile(path, []byte("other"), 0o644))
+	err := env.svc.CheckVersion(env.ctx, sessionID, path)
+	require.ErrorIs(t, err, ErrStaleRead)
+}
+
+func TestService_CheckVersionRejectsUnreadExistingFile(t *testing.T) {
+	env := setupTest(t)
+	sessionID := "unread-session"
+	env.createSession(t, sessionID)
+
+	path := filepath.Join(t.TempDir(), "file.txt")
+	require.NoError(t, os.WriteFile(path, []byte("content"), 0o644))
+
+	err := env.svc.CheckVersion(env.ctx, sessionID, path)
+	require.ErrorIs(t, err, ErrUnreadFile)
+}
+
+func TestService_CheckVersionAllowsAbsenceThenCreate(t *testing.T) {
+	env := setupTest(t)
+	sessionID := "create-session"
+	env.createSession(t, sessionID)
+
+	path := filepath.Join(t.TempDir(), "new.txt")
+	env.svc.RecordVersion(env.ctx, sessionID, path)
+	require.NoError(t, env.svc.CheckVersion(env.ctx, sessionID, path))
+
+	require.NoError(t, os.WriteFile(path, []byte("created"), 0o644))
+	err := env.svc.CheckVersion(env.ctx, sessionID, path)
+	require.ErrorIs(t, err, ErrStaleRead)
 }
 
 func TestService_RecordRead_DifferentPaths(t *testing.T) {

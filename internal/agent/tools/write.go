@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/diff"
@@ -71,11 +70,8 @@ func NewWriteTool(
 					return fantasy.NewTextErrorResponse(fmt.Sprintf("Path is a directory, not a file: %s", filePath)), nil
 				}
 
-				modTime := fileInfo.ModTime().Truncate(time.Second)
-				lastRead := filetracker.LastReadTime(ctx, sessionID, filePath)
-				if modTime.After(lastRead) {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("File %s has been modified since it was last read.\nLast modification: %s\nLast read: %s\n\nPlease read the file again before modifying it.",
-						filePath, modTime.Format(time.RFC3339), lastRead.Format(time.RFC3339))), nil
+				if err := filetracker.CheckVersion(ctx, sessionID, filePath); err != nil {
+					return fantasy.NewTextErrorResponse(err.Error()), nil
 				}
 
 				oldContent, readErr := os.ReadFile(filePath)
@@ -100,8 +96,9 @@ func NewWriteTool(
 				strings.TrimPrefix(filePath, workingDir),
 			)
 
-			p, err := permissions.Request(
+			outcome, err := RequestApproval(
 				ctx,
+				permissions,
 				permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					Path:        fsext.PathOrPrefix(filePath, workingDir),
@@ -119,7 +116,7 @@ func NewWriteTool(
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
-			if !p {
+			if outcome != ApprovalAllowedOnce {
 				resp := NewPermissionDeniedResponse()
 				resp = fantasy.WithResponseMetadata(resp, WriteResponseMetadata{
 					Diff:      diff,
@@ -129,7 +126,7 @@ func NewWriteTool(
 				return resp, nil
 			}
 
-			if err = writeFileWithParents(filePath, []byte(params.Content)); err != nil {
+			if err = writeFileAtomic(filePath, []byte(params.Content)); err != nil {
 				return fantasy.ToolResponse{}, err
 			}
 
@@ -156,6 +153,7 @@ func NewWriteTool(
 			}
 
 			filetracker.RecordRead(ctx, sessionID, filePath)
+			filetracker.RecordVersion(ctx, sessionID, filePath)
 
 			notifyLSPs(ctx, lspManager, params.FilePath)
 
@@ -183,14 +181,38 @@ func ensureParentDir(path string) error {
 	return nil
 }
 
-// writeFileWithParents writes data to path, creating any missing parent
-// directories. Call it only after write permission has been granted.
-func writeFileWithParents(path string, data []byte) error {
+// writeFileAtomic writes data to a temporary file in the destination
+// directory and renames it into place, so a crash leaves either the old
+// file or the complete new one, never a partial write. Call it only after
+// write permission has been granted.
+func writeFileAtomic(path string, data []byte) error {
 	if err := ensureParentDir(path); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) //nolint:errcheck
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return fmt.Errorf("failed to write file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to sync file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return fmt.Errorf("failed to set file mode: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("failed to replace file: %w", err)
 	}
 	return nil
 }

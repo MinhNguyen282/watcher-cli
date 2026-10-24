@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -117,7 +118,7 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 		History:     files,
 		Permissions: permission.NewPermissionService(store.WorkingDir(), skipPermissionsRequests, allowedTools),
 		Questions:   question.NewService(),
-		FileTracker: filetracker.NewService(q),
+		FileTracker: filetracker.NewService(q, conn),
 		LSPManager:  lsp.NewManager(store),
 		Skills:      skillsMgr,
 
@@ -313,7 +314,11 @@ func (app *App) resolveSession(ctx context.Context, continueSessionID string, us
 
 // RunNonInteractive runs the application in non-interactive mode with the
 // given prompt, printing to stdout.
-func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt, largeModel, smallModel, fastModel, reasoningEffort string, hideSpinner bool, continueSessionID string, useLast bool) error {
+func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt, largeModel, smallModel, fastModel, reasoningEffort string, hideSpinner bool, continueSessionID string, useLast bool, jsonOutput ...bool) error {
+	asJSON := len(jsonOutput) > 0 && jsonOutput[0]
+	if asJSON {
+		hideSpinner = true
+	}
 	slog.Info("Running in non-interactive mode")
 
 	// Re-initialize the coder agent without interactive-only tools.
@@ -454,7 +459,10 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 
 		// Always print a newline at the end. If output is a TTY this will
 		// prevent the prompt from overwriting the last line of output.
-		_, _ = fmt.Fprintln(output)
+		// JSON mode is newline-delimited already.
+		if !asJSON {
+			_, _ = fmt.Fprintln(output)
+		}
 	}()
 
 	for {
@@ -467,6 +475,17 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 		select {
 		case result := <-done:
 			stopSpinner()
+			if asJSON {
+				status := "completed"
+				if result.err != nil {
+					status = "failed"
+				}
+				writeRunJSON(output, map[string]any{
+					"type":       "result",
+					"session_id": sess.ID,
+					"status":     status,
+				})
+			}
 			if result.err != nil {
 				if errors.Is(result.err, context.Canceled) || errors.Is(result.err, agent.ErrRequestCancelled) {
 					slog.Debug("Non-interactive: agent processing cancelled", "session_id", sess.ID)
@@ -498,7 +517,16 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 				// Ignore initial whitespace-only messages.
 				if printed || strings.TrimSpace(part) != "" {
 					printed = true
-					fmt.Fprint(output, part)
+					if asJSON {
+						writeRunJSON(output, map[string]any{
+							"type":       "assistant_delta",
+							"session_id": sess.ID,
+							"message_id": msg.ID,
+							"content":    part,
+						})
+					} else {
+						fmt.Fprint(output, part)
+					}
 				}
 				messageReadBytes[msg.ID] = len(content)
 			}
@@ -508,6 +536,17 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 			return ctx.Err()
 		}
 	}
+}
+
+// writeRunJSON writes one newline-delimited JSON object. Data goes to
+// stdout; diagnostics stay on stderr.
+func writeRunJSON(output io.Writer, value any) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		slog.Warn("Failed to encode run JSON", "error", err)
+		return
+	}
+	_, _ = fmt.Fprintln(output, string(data))
 }
 
 func (app *App) UpdateAgentModel(ctx context.Context) error {

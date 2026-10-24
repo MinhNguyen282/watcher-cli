@@ -131,8 +131,8 @@ func NewReplaceSymbolTool(
 			newContent := strings.Join(newLines, "\n")
 
 			sessionID := GetSessionFromContext(ctx)
-			if sessionID != "" && permissions != nil {
-				granted, err := permissions.Request(ctx, permission.CreatePermissionRequest{
+			if sessionID != "" {
+				outcome, err := RequestApproval(ctx, permissions, permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					Path:        params.FilePath,
 					ToolName:    ReplaceSymbolToolName,
@@ -146,8 +146,14 @@ func NewReplaceSymbolTool(
 				if err != nil {
 					return fantasy.ToolResponse{}, fmt.Errorf("permission request failed: %w", err)
 				}
-				if !granted {
+				if outcome != ApprovalAllowedOnce {
 					return NewPermissionDeniedResponse(), nil
+				}
+			}
+
+			if filetracker != nil && sessionID != "" {
+				if err := filetracker.CheckVersion(ctx, sessionID, params.FilePath); err != nil {
+					return fantasy.NewTextErrorResponse(err.Error()), nil
 				}
 			}
 
@@ -157,12 +163,13 @@ func NewReplaceSymbolTool(
 				}
 			}
 
-			if err := os.WriteFile(params.FilePath, []byte(newContent), 0o644); err != nil {
+			if err := writeFileAtomic(params.FilePath, []byte(newContent)); err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("failed to write file: %w", err)
 			}
 
 			if filetracker != nil && sessionID != "" {
 				filetracker.RecordRead(ctx, sessionID, params.FilePath)
+				filetracker.RecordVersion(ctx, sessionID, params.FilePath)
 			}
 
 			notifyLSPs(ctx, lspManager, params.FilePath)

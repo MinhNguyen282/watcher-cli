@@ -6,6 +6,11 @@ Read current stdout/stderr from a background shell by its shell_id.
 - When the wait expires, return current output with Status: running and an
   explicit timeout notice. The background job keeps running and remains tracked.
 - Caller cancellation interrupts the wait without terminating the job.
+- Repeated reads continue from the previous read position. Set
+  from_start=true to reread retained output, or offset to an absolute byte
+  position. If old output was dropped by the buffer limit, the result says so.
+- Completion facts are reported independently: exit_code, signal, timed_out,
+  aborted, and kill_reason.
 
 For long-running dev servers, use wait=false to inspect startup logs and check
 HTTP readiness separately. A server does not need to exit to be ready. A wait

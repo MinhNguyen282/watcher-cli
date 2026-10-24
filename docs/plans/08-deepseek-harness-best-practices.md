@@ -1,6 +1,7 @@
 # Plan 08 — Apply DeepSeek Harness Best Practices to Watcher CLI
 
-> Status: **Proposed** · Priority: **High** · Source revision:
+> Status: **Implemented (Phase 0-3; see section 11 for deferrals)** ·
+> Priority: **High** · Source revision:
 > `deepseek-harness@22ddee37` (2026-10-23) · Scope: 16 parallel
 > subsystem reviews covering docs, core, tools, llm, shell, fs, session,
 > UI, testing, extensions, SDK, process, and postmortems.
@@ -397,24 +398,24 @@ cross-realm identity, Typert, or generated service faces.
 
 ## 6. Acceptance Criteria
 
-- [ ] Every tool call produces exactly one result, including denial,
+- [x] Every tool call produces exactly one result, including denial,
       cancel, timeout, panic, and crash recovery.
-- [ ] No tool body calls `permissions.Request` directly.
-- [ ] A guard denial cannot be overridden by a later allow.
-- [ ] Missing or unanswerable approval denies without executing.
-- [ ] Job output is bounded, cursor-readable, and owner-scoped.
+- [x] No tool body calls `permissions.Request` directly.
+- [x] A guard denial cannot be overridden by a later allow.
+- [x] Missing or unanswerable approval denies without executing.
+- [x] Job output is bounded, cursor-readable, and owner-scoped.
 - [ ] `watch` can scan a pre-existing log and does not block its scanner
       on a slow fix.
-- [ ] Same-second rewrites and unread files are rejected by every
+- [x] Same-second rewrites and unread files are rejected by every
       mutator.
 - [ ] Session rows can be rebuilt from an append-only event log; no
       dangling tool calls after a crash.
-- [ ] Compaction uses context tokens only and runs before the next
+- [x] Compaction uses context tokens only and runs before the next
       request.
-- [ ] Verify results render as structured checks, not raw protocol text.
-- [ ] `task check` is the single local/CI entry; new guards have
+- [x] Verify results render as structured checks, not raw protocol text.
+- [x] `task check` is the single local/CI entry; new guards have
       negative controls.
-- [ ] Full-suite environmental failures are quarantined or documented,
+- [x] Full-suite environmental failures are quarantined or documented,
       not treated as normal.
 
 ## 7. Metrics
@@ -477,3 +478,40 @@ Track these before and after each phase:
 9. Add interrupted-turn repair with synthetic tool results.
 10. Add a `task check` gate runner and one negative-control test for
     every new guard.
+
+## 11. Implementation Notes (2026-10-25)
+
+Landed:
+
+- `internal/agent/tool_pipeline.go`: hook resolve, intent logging, guard
+  chain, approval injection, timeout, panic recovery, and one-result
+  normalization. `tools.RequestApproval` is the only approval entry point
+  used by tool bodies.
+- `internal/agent/tool_events.go` plus `session_event` append-only log,
+  contiguous sequence enforcement, synthetic results for dangling calls,
+  and repair on the settled-read path.
+- Bounded background-job rings with cursor reads, `from_start`, ownership,
+  and independent exit/signal/timeout/abort facts.
+- Content-version read gates, atomic writes, view line markers and totals,
+  repo-map result bounds.
+- Context-token-only compaction budgets with configurable headroom or
+  ratio, warm-prefix summarization, and truncated-summary rejection.
+- Structured verify card and `crush run --json` newline-delimited events.
+- `task check`, `docs/defensive-patterns.md`, `docs/testing.md`, ADR folder,
+  and PR template.
+
+Not applicable or deferred in this repository:
+
+- `watch` does not exist as a tool or command, so the watch scanner,
+  `--from-start`, and slow-handler queue changes have no target. The
+  equivalent cursor/`from_start` behavior landed on `job_output`.
+- The command palette grouping and reasoning-control consolidation were
+  left for a dedicated UI pass; the verify card and CLI JSON output are in.
+- Session events are persisted and repaired, but `sessions`, `messages`,
+  and `files` remain the read projections; a full projection rebuild was
+  not added.
+- Retry policy remains provider/fantasy-owned; no duplicate retry loop was
+  introduced.
+- The repo-map cache still keys on an mtime:size stamp; result output is
+  bounded, but a content-hash cache key needs a measured rebuild budget
+  first.

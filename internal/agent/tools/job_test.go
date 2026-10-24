@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"os/exec"
 	"runtime"
 	"testing"
 	"time"
@@ -11,6 +12,15 @@ import (
 )
 
 const testMaxJobs = 50
+
+// requireSleep skips tests whose command scheduling depends on the POSIX
+// sleep utility. The embedded shell does not provide it on Windows.
+func requireSleep(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep utility is not available on this host")
+	}
+}
 
 func TestBackgroundShell_Integration(t *testing.T) {
 	t.Parallel()
@@ -205,6 +215,7 @@ func TestBackgroundShell_StdoutAndStderr(t *testing.T) {
 
 func TestBackgroundShell_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
+	requireSleep(t)
 
 	workingDir := t.TempDir()
 	ctx := context.Background()
@@ -285,6 +296,7 @@ func TestBackgroundShell_List(t *testing.T) {
 
 func TestBackgroundShell_AutoBackground(t *testing.T) {
 	t.Parallel()
+	requireSleep(t)
 
 	workingDir := t.TempDir()
 	ctx := context.Background()

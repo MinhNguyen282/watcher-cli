@@ -84,6 +84,13 @@ tasks:
     cmds:
       - go test -race -failfast ./... {{.CLI_ARGS}}
 
+  check:
+    desc: Run the project checks (MODE=static|unit|integration|e2e|coverage|all)
+    vars:
+      MODE: '{{.MODE | default "all"}}'
+    cmds:
+      - sh scripts/check.sh {{.MODE}}
+
   test:record:
     desc: Run tests and record all VCR cassettes again
     aliases: [record]

@@ -23,6 +23,7 @@ func startOutputTestJob(t *testing.T, command string) *shell.BackgroundShell {
 
 func TestJobOutputWaitTimesOutWithoutStoppingJob(t *testing.T) {
 	t.Parallel()
+	requireSleep(t)
 	job := startOutputTestJob(t, "echo OUTPUT_READY; sleep 30")
 	require.Eventually(t, func() bool { stdout, _, _, _ := job.GetOutput(); return stdout != "" }, 3*time.Second, 10*time.Millisecond)
 	tool := NewJobOutputTool(t.TempDir())
@@ -67,6 +68,7 @@ func TestJobOutputCompletedBeforeTimeout(t *testing.T) {
 
 func TestJobOutputCallerCancellationPreservesJob(t *testing.T) {
 	t.Parallel()
+	requireSleep(t)
 	job := startOutputTestJob(t, "echo OUTPUT_READY; sleep 30")
 	tool := NewJobOutputTool(t.TempDir())
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)

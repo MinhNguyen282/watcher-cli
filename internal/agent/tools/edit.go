@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/diff"
@@ -124,8 +123,9 @@ func createNewFile(edit editContext, filePath, content string, call fantasy.Tool
 		content,
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
-	p, err := edit.permissions.Request(
+	outcome, err := RequestApproval(
 		edit.ctx,
+		edit.permissions,
 		permission.CreatePermissionRequest{
 			SessionID:   sessionID,
 			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
@@ -143,7 +143,7 @@ func createNewFile(edit editContext, filePath, content string, call fantasy.Tool
 	if err != nil {
 		return fantasy.ToolResponse{}, err
 	}
-	if !p {
+	if outcome != ApprovalAllowedOnce {
 		resp := NewPermissionDeniedResponse()
 		resp = fantasy.WithResponseMetadata(resp, EditResponseMetadata{
 			OldContent: "",
@@ -154,7 +154,7 @@ func createNewFile(edit editContext, filePath, content string, call fantasy.Tool
 		return resp, nil
 	}
 
-	if err = writeFileWithParents(filePath, []byte(content)); err != nil {
+	if err = writeFileAtomic(filePath, []byte(content)); err != nil {
 		return fantasy.ToolResponse{}, err
 	}
 
@@ -173,6 +173,7 @@ func createNewFile(edit editContext, filePath, content string, call fantasy.Tool
 	}
 
 	edit.filetracker.RecordRead(edit.ctx, sessionID, filePath)
+	edit.filetracker.RecordVersion(edit.ctx, sessionID, filePath)
 
 	return fantasy.WithResponseMetadata(
 		fantasy.NewTextResponse("File created: "+filePath),
@@ -237,7 +238,7 @@ func notFoundError(content, old string) error {
 // and records the read in the file tracker. Callers must convert line endings
 // before calling this function.
 func commitFileChange(edit editContext, sessionID, filePath, oldContent, newContent string) error {
-	if err := os.WriteFile(filePath, []byte(newContent), 0o644); err != nil {
+	if err := writeFileAtomic(filePath, []byte(newContent)); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
 
@@ -259,6 +260,7 @@ func commitFileChange(edit editContext, sessionID, filePath, oldContent, newCont
 	}
 
 	edit.filetracker.RecordRead(edit.ctx, sessionID, filePath)
+	edit.filetracker.RecordVersion(edit.ctx, sessionID, filePath)
 	return nil
 }
 
@@ -280,19 +282,8 @@ func loadExistingFile(edit editContext, filePath, sessionError string) (sessionI
 		return "", "", false, fantasy.ToolResponse{}, fmt.Errorf("%s", sessionError)
 	}
 
-	lastRead := edit.filetracker.LastReadTime(edit.ctx, sessionID, filePath)
-	if lastRead.IsZero() {
-		return "", "", false, fantasy.NewTextErrorResponse("you must read the file before editing it. Use the View tool first"), nil
-	}
-
-	modTime := fileInfo.ModTime().Truncate(time.Second)
-	if modTime.After(lastRead) {
-		return "", "", false, fantasy.NewTextErrorResponse(
-			fmt.Sprintf(
-				"file %s has been modified since it was last read (mod time: %s, last read: %s)",
-				filePath, modTime.Format(time.RFC3339), lastRead.Format(time.RFC3339),
-			),
-		), nil
+	if err := edit.filetracker.CheckVersion(edit.ctx, sessionID, filePath); err != nil {
+		return "", "", false, fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
 	content, err := os.ReadFile(filePath)
@@ -324,8 +315,9 @@ func deleteContent(edit editContext, filePath, oldString string, replaceAll bool
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
 
-	p, err := edit.permissions.Request(
+	outcome, err := RequestApproval(
 		edit.ctx,
+		edit.permissions,
 		permission.CreatePermissionRequest{
 			SessionID:   sessionID,
 			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
@@ -343,7 +335,7 @@ func deleteContent(edit editContext, filePath, oldString string, replaceAll bool
 	if err != nil {
 		return fantasy.ToolResponse{}, err
 	}
-	if !p {
+	if outcome != ApprovalAllowedOnce {
 		resp := NewPermissionDeniedResponse()
 		resp = fantasy.WithResponseMetadata(resp, EditResponseMetadata{
 			OldContent: oldContent,
@@ -397,8 +389,9 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
 
-	p, err := edit.permissions.Request(
+	outcome, err := RequestApproval(
 		edit.ctx,
+		edit.permissions,
 		permission.CreatePermissionRequest{
 			SessionID:   sessionID,
 			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
@@ -416,7 +409,7 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 	if err != nil {
 		return fantasy.ToolResponse{}, err
 	}
-	if !p {
+	if outcome != ApprovalAllowedOnce {
 		resp := NewPermissionDeniedResponse()
 		resp = fantasy.WithResponseMetadata(resp, EditResponseMetadata{
 			OldContent: oldContent,

@@ -134,8 +134,9 @@ func NewViewTool(
 
 			// Request permission for files outside working directory, unless it's a skill file.
 			if isOutsideWorkDir && !isSkillFile {
-				granted, permReqErr := permissions.Request(
+				outcome, permReqErr := RequestApproval(
 					ctx,
+					permissions,
 					permission.CreatePermissionRequest{
 						SessionID:   sessionID,
 						Path:        absFilePath,
@@ -149,7 +150,7 @@ func NewViewTool(
 				if permReqErr != nil {
 					return fantasy.ToolResponse{}, permReqErr
 				}
-				if !granted {
+				if outcome != ApprovalAllowedOnce {
 					return NewPermissionDeniedResponse(), nil
 				}
 			}
@@ -249,13 +250,15 @@ func NewViewTool(
 			output := "<file>\n"
 			output += addLineNumbers(content, params.Offset+1)
 
+			totalLines := countFileLines(filePath)
 			if hasMore {
-				output += fmt.Sprintf("\n\n(File has more lines. Use 'offset' parameter to read beyond line %d)",
-					params.Offset+len(strings.Split(content, "\n")))
+				output += fmt.Sprintf("\n\n(File has %d lines total. Use 'offset' parameter to read beyond line %d)",
+					totalLines, params.Offset+len(strings.Split(content, "\n")))
 			}
 			output += "\n</file>\n"
 			output += getDiagnostics(filePath, lspManager)
 			filetracker.RecordRead(ctx, sessionID, filePath)
+			filetracker.RecordVersion(ctx, sessionID, filePath)
 
 			meta := ViewResponseMetadata{
 				FilePath: filePath,
@@ -335,8 +338,10 @@ func readTextFile(filePath string, offset, limit, maxContentSize int) (string, b
 		lineText = strings.TrimSuffix(lineText, "\r")
 		if len(lineText) > MaxLineLength {
 			// Truncate at a rune boundary to avoid splitting
-			// multi-byte characters.
-			lineText = strings.ToValidUTF8(lineText[:MaxLineLength], "") + "..."
+			// multi-byte characters. The marker makes the loss
+			// explicit instead of silently shortening the line.
+			lineText = strings.ToValidUTF8(lineText[:MaxLineLength], "") +
+				fmt.Sprintf("... (line truncated to %d chars)", MaxLineLength)
 		}
 		projectedSize := contentSize + len(lineText)
 		if len(lines) > 0 {
@@ -360,6 +365,26 @@ func readTextFile(filePath string, offset, limit, maxContentSize int) (string, b
 	}
 
 	return strings.Join(lines, "\n"), hasMore, nil
+}
+
+// countFileLines returns the exact number of lines in a file. It is used
+// only for the view footer, so an unreadable file reports zero rather than
+// failing an otherwise successful read.
+func countFileLines(filePath string) int {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return 0
+	}
+	defer f.Close() //nolint:errcheck
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, MaxViewSize)
+	lines := 0
+	for scanner.Scan() {
+		lines++
+	}
+	return lines
 }
 
 func getImageMimeType(filePath string) (bool, string) {

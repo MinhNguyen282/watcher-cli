@@ -176,7 +176,7 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 	} else {
 		description = fmt.Sprintf("Create file %s with %d edits", params.FilePath, editsApplied)
 	}
-	p, err := edit.permissions.Request(edit.ctx, permission.CreatePermissionRequest{
+	outcome, err := RequestApproval(edit.ctx, edit.permissions, permission.CreatePermissionRequest{
 		SessionID:   sessionID,
 		Path:        fsext.PathOrPrefix(params.FilePath, edit.workingDir),
 		ToolCallID:  call.ID,
@@ -192,7 +192,7 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 	if err != nil {
 		return fantasy.ToolResponse{}, err
 	}
-	if !p {
+	if outcome != ApprovalAllowedOnce {
 		resp := NewPermissionDeniedResponse()
 		resp = fantasy.WithResponseMetadata(resp, MultiEditResponseMetadata{
 			OldContent:   "",
@@ -205,7 +205,7 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 		return resp, nil
 	}
 
-	if err = writeFileWithParents(params.FilePath, []byte(currentContent)); err != nil {
+	if err = writeFileAtomic(params.FilePath, []byte(currentContent)); err != nil {
 		return fantasy.ToolResponse{}, err
 	}
 
@@ -221,6 +221,7 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 	}
 
 	edit.filetracker.RecordRead(edit.ctx, sessionID, params.FilePath)
+	edit.filetracker.RecordVersion(edit.ctx, sessionID, params.FilePath)
 
 	var message string
 	if len(failedEdits) > 0 {
@@ -279,7 +280,7 @@ func processMultiEditExistingFile(edit editContext, params MultiEditParams, call
 	} else {
 		description = fmt.Sprintf("Apply %d edits to file %s", editsApplied, params.FilePath)
 	}
-	p, err := edit.permissions.Request(edit.ctx, permission.CreatePermissionRequest{
+	outcome, err := RequestApproval(edit.ctx, edit.permissions, permission.CreatePermissionRequest{
 		SessionID:   sessionID,
 		Path:        fsext.PathOrPrefix(params.FilePath, edit.workingDir),
 		ToolCallID:  call.ID,
@@ -295,7 +296,7 @@ func processMultiEditExistingFile(edit editContext, params MultiEditParams, call
 	if err != nil {
 		return fantasy.ToolResponse{}, err
 	}
-	if !p {
+	if outcome != ApprovalAllowedOnce {
 		resp := NewPermissionDeniedResponse()
 		resp = fantasy.WithResponseMetadata(resp, MultiEditResponseMetadata{
 			OldContent:   oldContent,

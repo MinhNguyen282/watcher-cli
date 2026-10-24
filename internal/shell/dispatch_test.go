@@ -313,6 +313,9 @@ func TestDispatch_BashShebang(t *testing.T) {
 		t.Skipf("bash not in PATH: %v", err)
 	}
 	_ = bash
+	if _, err := exec.LookPath("env"); err != nil {
+		t.Skipf("env not in PATH: %v", err)
+	}
 
 	dir := t.TempDir()
 	script := writeScript(t, dir, "bash-echo.sh", "#!/usr/bin/env bash\necho bashout\n")
@@ -337,6 +340,9 @@ func TestDispatch_BashShebang(t *testing.T) {
 func TestDispatch_ShebangPassesExitCode(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skipf("bash not in PATH: %v", err)
+	}
+	if _, err := exec.LookPath("env"); err != nil {
+		t.Skipf("env not in PATH: %v", err)
 	}
 	dir := t.TempDir()
 	script := writeScript(t, dir, "fail.sh", "#!/usr/bin/env bash\nexit 5\n")

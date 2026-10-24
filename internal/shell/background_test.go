@@ -367,6 +367,80 @@ func TestBackgroundShell_WaitContext_Canceled(t *testing.T) {
 	require.False(t, bgShell.WaitContext(ctx))
 }
 
+func TestSyncBufferDropsOldestAndReportsLostBytes(t *testing.T) {
+	t.Parallel()
+
+	buf := newSyncBuffer(5)
+	_, err := buf.WriteString("abcdefgh")
+	require.NoError(t, err)
+	require.Equal(t, "defgh", buf.String())
+
+	data, next, truncated, total := buf.readFrom(0)
+	require.True(t, truncated)
+	require.Equal(t, "defgh", data)
+	require.Equal(t, int64(8), next)
+	require.Equal(t, int64(8), total)
+}
+
+func TestBackgroundShellCursorReadsOnlyNewOutput(t *testing.T) {
+	t.Parallel()
+
+	job := &BackgroundShell{
+		done:   make(chan struct{}),
+		stdout: newSyncBuffer(1024),
+		stderr: newSyncBuffer(1024),
+	}
+	_, err := job.stdout.WriteString("first")
+	require.NoError(t, err)
+
+	stdout, _, next, _, truncated, _, _ := job.ReadFrom(false, 0)
+	require.Equal(t, "first", stdout)
+	require.False(t, truncated)
+
+	_, err = job.stdout.WriteString(" second")
+	require.NoError(t, err)
+	stdout, _, next2, _, _, _, _ := job.ReadFrom(false, 0)
+	require.Equal(t, " second", stdout)
+	require.Greater(t, next2, next)
+
+	stdout, _, _, _, _, _, _ = job.ReadFrom(false, 0)
+	require.Empty(t, stdout, "a third read should have no new bytes")
+
+	stdout, _, _, _, _, _, _ = job.ReadFrom(true, 0)
+	require.Equal(t, "first second", stdout)
+}
+
+func TestBackgroundShellOwnership(t *testing.T) {
+	t.Parallel()
+
+	manager := newBackgroundShellManager()
+	job, err := manager.Start(t.Context(), t.TempDir(), nil, "echo owned", "", testMaxJobs, WithSessionID("session-a"))
+	require.NoError(t, err)
+	job.Wait()
+
+	_, exists, owned := manager.GetOwned(job.ID, "session-a")
+	require.True(t, exists)
+	require.True(t, owned)
+
+	_, exists, owned = manager.GetOwned(job.ID, "session-b")
+	require.True(t, exists)
+	require.False(t, owned, "another session must not read this job")
+}
+
+func TestBackgroundShellOutcomeReportsExitCode(t *testing.T) {
+	t.Parallel()
+
+	manager := newBackgroundShellManager()
+	job, err := manager.Start(t.Context(), t.TempDir(), nil, "exit 7", "", testMaxJobs)
+	require.NoError(t, err)
+	job.Wait()
+
+	outcome := job.Outcome()
+	require.Equal(t, 7, outcome.ExitCode)
+	require.False(t, outcome.TimedOut)
+	require.False(t, outcome.Aborted)
+}
+
 const testMaxJobs = 50
 
 // track registers a fake job with the manager. When completedAt is zero the

@@ -44,8 +44,9 @@ func NewListMCPResourcesTool(cfg *config.ConfigStore, permissions permission.Ser
 			}
 
 			relPath := filepathext.SmartJoin(cfg.WorkingDir(), params.MCPName)
-			p, err := permissions.Request(
+			outcome, err := RequestApproval(
 				ctx,
+				permissions,
 				permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					Path:        relPath,
@@ -59,7 +60,7 @@ func NewListMCPResourcesTool(cfg *config.ConfigStore, permissions permission.Ser
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
-			if !p {
+			if outcome != ApprovalAllowedOnce {
 				return NewPermissionDeniedResponse(), nil
 			}
 

@@ -90,7 +90,7 @@ func TestReadTextFileTruncatesLongLines(t *testing.T) {
 	content, hasMore, err := readTextFile(filePath, 0, 1, 0)
 	require.NoError(t, err)
 	require.False(t, hasMore)
-	require.Equal(t, strings.Repeat("a", MaxLineLength)+"...", content)
+	require.Equal(t, strings.Repeat("a", MaxLineLength)+fmt.Sprintf("... (line truncated to %d chars)", MaxLineLength), content)
 }
 
 func TestReadTextFileLineExceeding1MB(t *testing.T) {
@@ -105,7 +105,7 @@ func TestReadTextFileLineExceeding1MB(t *testing.T) {
 	content, hasMore, err := readTextFile(filePath, 0, 1, 0)
 	require.NoError(t, err)
 	require.False(t, hasMore)
-	require.Equal(t, strings.Repeat("A", MaxLineLength)+"...", content)
+	require.Equal(t, strings.Repeat("A", MaxLineLength)+fmt.Sprintf("... (line truncated to %d chars)", MaxLineLength), content)
 }
 
 func TestViewToolAllowsSmallSectionsOfLargeFiles(t *testing.T) {
@@ -243,6 +243,12 @@ func (m *mockViewPermissionService) SubscribeNotifications(ctx context.Context) 
 type mockFileTracker struct{}
 
 func (m mockFileTracker) RecordRead(ctx context.Context, sessionID, path string) {}
+
+func (m mockFileTracker) RecordVersion(ctx context.Context, sessionID, path string) {}
+
+func (m mockFileTracker) CheckVersion(ctx context.Context, sessionID, path string) error {
+	return nil
+}
 
 func (m mockFileTracker) LastReadTime(ctx context.Context, sessionID, path string) time.Time {
 	return time.Time{}

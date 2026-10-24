@@ -176,6 +176,17 @@ func TestYourFunction(t *testing.T) {
   - You can also use `task fmt` to run `gofumpt -w .` on the entire project,
     as long as `gofumpt` is on the `PATH`.
 
+## Error handling
+
+- Use typed errors and `errors.Is`/`errors.As`; never route decisions by
+  parsing an error message.
+- Every failure names its handling owner: the caller, the agent loop, the
+  tool pipeline, or the user.
+- Unknown outcomes must be visible. Do not silently convert an unknown state
+  into success or failure.
+- Tool bodies return a `fantasy.ToolResponse`. The dispatch pipeline
+  normalizes raw errors, panics, timeouts, and aborts into one result.
+
 ## Comments
 
 - Comments that live on their own lines should start with capital letters and

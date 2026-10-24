@@ -77,8 +77,9 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for creating a new file")
 			}
 
-			p, err := permissions.Request(
+			outcome, err := RequestApproval(
 				ctx,
+				permissions,
 				permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					Path:        workingDir,
@@ -92,7 +93,7 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
-			if !p {
+			if outcome != ApprovalAllowedOnce {
 				return NewPermissionDeniedResponse(), nil
 			}
 

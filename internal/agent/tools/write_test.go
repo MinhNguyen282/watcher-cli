@@ -16,6 +16,12 @@ type mockFileTrackerService struct{}
 
 func (m mockFileTrackerService) RecordRead(ctx context.Context, sessionID, path string) {}
 
+func (m mockFileTrackerService) RecordVersion(ctx context.Context, sessionID, path string) {}
+
+func (m mockFileTrackerService) CheckVersion(ctx context.Context, sessionID, path string) error {
+	return nil
+}
+
 func (m mockFileTrackerService) LastReadTime(ctx context.Context, sessionID, path string) time.Time {
 	return time.Now()
 }

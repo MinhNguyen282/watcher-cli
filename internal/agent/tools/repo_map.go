@@ -54,17 +54,17 @@ func NewRepoMapTool(svc *repomap.Service) fantasy.AgentTool {
 			switch query {
 			case "blast_radius", "blast":
 				symbols, files := g.BlastRadius([]string{target}, depth)
-				return fantasy.NewTextResponse(renderBlastRadius(target, depth, symbols, files)), nil
+				return repoMapResponse(renderBlastRadius(target, depth, symbols, files)), nil
 			case "callers":
-				return fantasy.NewTextResponse(renderSymbols("Callers of "+target, g.Callers(target))), nil
+				return repoMapResponse(renderSymbols("Callers of "+target, g.Callers(target))), nil
 			case "callees":
-				return fantasy.NewTextResponse(renderSymbols("Callees of "+target, g.Callees(target))), nil
+				return repoMapResponse(renderSymbols("Callees of "+target, g.Callees(target))), nil
 			case "implementers":
-				return fantasy.NewTextResponse(renderSymbols("Implementers of "+target, g.Implementers(target))), nil
+				return repoMapResponse(renderSymbols("Implementers of "+target, g.Implementers(target))), nil
 			case "related":
-				return fantasy.NewTextResponse(renderFiles("Files related to "+target, g.RelatedFiles(target))), nil
+				return repoMapResponse(renderFiles("Files related to "+target, g.RelatedFiles(target))), nil
 			case "tests_for":
-				return fantasy.NewTextResponse(renderFiles("Tests covering "+target, g.TestsFor([]string{target}))), nil
+				return repoMapResponse(renderFiles("Tests covering "+target, g.TestsFor([]string{target}))), nil
 			case "impact":
 				symbols, files := g.BlastRadius([]string{target}, depth)
 				var sb strings.Builder
@@ -73,13 +73,25 @@ func NewRepoMapTool(svc *repomap.Service) fantasy.AgentTool {
 					sb.WriteString("\n")
 					sb.WriteString(renderFiles("Tests covering the affected files", tests))
 				}
-				return fantasy.NewTextResponse(sb.String()), nil
+				return repoMapResponse(sb.String()), nil
 			case "summary", "":
-				return fantasy.NewTextResponse(renderSummary(g)), nil
+				return repoMapResponse(renderSummary(g)), nil
 			default:
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("unknown query %q (expected blast_radius, impact, callers, callees, implementers, related, tests_for, or summary)", params.Query)), nil
 			}
 		})
+}
+
+// repoMapResponse bounds a query result by characters and reminds the
+// reader that the index is a pointer, not the source of truth.
+func repoMapResponse(text string) fantasy.ToolResponse {
+	const maxBytes = 12 << 10
+	if len(text) > maxBytes {
+		half := maxBytes / 2
+		text = text[:half] + "\n... [repo map output truncated; narrow the query] ...\n" + text[len(text)-half:]
+	}
+	text += "\n\n(Verify with view or grep before editing.)"
+	return fantasy.NewTextResponse(text)
 }
 
 func renderBlastRadius(target string, depth int, symbols []repomap.Symbol, files []string) string {

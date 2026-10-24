@@ -77,7 +77,7 @@ func testEnv(t *testing.T) fakeEnv {
 
 	permissions := permission.NewPermissionService(workingDir, true, []string{})
 	history := history.NewService(q, conn)
-	filetrackerService := filetracker.NewService(q)
+	filetrackerService := filetracker.NewService(q, conn)
 	lspClients := csync.NewMap[string, *lsp.Client]()
 
 	t.Cleanup(func() {
@@ -167,7 +167,7 @@ func coderAgent(r *vcr.Recorder, env fakeEnv, large, small fantasy.LanguageModel
 
 	allTools := []fantasy.AgentTool{
 		tools.NewBashTool(env.permissions, env.workingDir, cfg.Config().Options.DataDirectory, cfg.Config().Options.Attribution, modelName, cfg.Config().Options.GetMaxBackgroundJobs()),
-		tools.NewDownloadTool(env.permissions, env.workingDir, r.GetDefaultClient()),
+		tools.NewDownloadTool(env.permissions, *env.filetracker, env.workingDir, r.GetDefaultClient()),
 		tools.NewEditTool(nil, env.permissions, env.history, *env.filetracker, env.workingDir),
 		tools.NewMultiEditTool(nil, env.permissions, env.history, *env.filetracker, env.workingDir),
 		tools.NewFetchTool(env.permissions, env.workingDir, r.GetDefaultClient()),

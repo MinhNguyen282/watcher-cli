@@ -61,8 +61,8 @@ func NewRenameTool(
 			}
 
 			sessionID := GetSessionFromContext(ctx)
-			if sessionID != "" && permissions != nil {
-				granted, err := permissions.Request(ctx, permission.CreatePermissionRequest{
+			if sessionID != "" {
+				outcome, err := RequestApproval(ctx, permissions, permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					ToolName:    RenameToolName,
 					Description: fmt.Sprintf("Rename '%s' to '%s'", params.Symbol, params.NewName),
@@ -70,12 +70,18 @@ func NewRenameTool(
 				if err != nil {
 					return fantasy.ToolResponse{}, fmt.Errorf("permission request failed: %w", err)
 				}
-				if !granted {
+				if outcome != ApprovalAllowedOnce {
 					return NewPermissionDeniedResponse(), nil
 				}
 			}
 
 			affectedFiles := collectAffectedFiles(edit)
+
+			if filetracker != nil && sessionID != "" {
+				if err := filetracker.CheckVersion(ctx, sessionID, resolved.path); err != nil {
+					return fantasy.NewTextErrorResponse(err.Error()), nil
+				}
+			}
 
 			if files != nil && sessionID != "" {
 				for _, path := range affectedFiles {
@@ -98,6 +104,7 @@ func NewRenameTool(
 			if filetracker != nil && sessionID != "" {
 				for _, path := range affectedFiles {
 					filetracker.RecordRead(ctx, sessionID, path)
+					filetracker.RecordVersion(ctx, sessionID, path)
 				}
 			}
 

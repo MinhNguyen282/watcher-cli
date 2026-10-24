@@ -15,6 +15,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/filepathext"
+	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/permission"
 )
 
@@ -50,7 +51,7 @@ func downloadDescription() string {
 	})
 }
 
-func NewDownloadTool(permissions permission.Service, workingDir string, client *http.Client) fantasy.AgentTool {
+func NewDownloadTool(permissions permission.Service, files filetracker.Service, workingDir string, client *http.Client) fantasy.AgentTool {
 	if client == nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.MaxIdleConns = 100
@@ -87,8 +88,9 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for downloading files")
 			}
 
-			p, err := permissions.Request(
+			outcome, err := RequestApproval(
 				ctx,
+				permissions,
 				permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					Path:        filePath,
@@ -101,8 +103,14 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
-			if !p {
+			if outcome != ApprovalAllowedOnce {
 				return NewPermissionDeniedResponse(), nil
+			}
+
+			if files != nil {
+				if err := files.CheckVersion(ctx, sessionID, filePath); err != nil {
+					return fantasy.NewTextErrorResponse(err.Error()), nil
+				}
 			}
 
 			// Handle timeout with context
@@ -155,6 +163,9 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 			bytesWritten, err := io.Copy(outFile, resp.Body)
 			if err != nil {
 				return fantasy.NewTextErrorResponse("Failed to write file: " + err.Error()), nil
+			}
+			if files != nil {
+				files.RecordVersion(ctx, sessionID, filePath)
 			}
 
 			contentType := resp.Header.Get("Content-Type")

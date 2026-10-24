@@ -857,6 +857,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		SystemPrompt:         "",
 		IsSubAgent:           isSubAgent,
 		DisableAutoSummarize: c.cfg.Config().Options.DisableAutoSummarize,
+		ContextOptions:       c.cfg.Config().Options,
 		IsYolo:               c.permissions.SkipRequests(),
 		Sessions:             c.sessions,
 		Messages:             c.messages,
@@ -947,7 +948,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewCrushLogsTool(logFile),
 		tools.NewJobOutputTool(c.cfg.Config().Options.DataDirectory),
 		tools.NewJobKillTool(),
-		tools.NewDownloadTool(c.permissions, c.cfg.WorkingDir(), nil),
+		tools.NewDownloadTool(c.permissions, c.filetracker, c.cfg.WorkingDir(), nil),
 		tools.NewEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 		tools.NewMultiEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 		tools.NewFetchTool(c.permissions, c.cfg.WorkingDir(), nil),
@@ -1036,18 +1037,21 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		return strings.Compare(a.Info().Name, b.Info().Name)
 	})
 
-	// Wrap tools with hook interception for the top-level agent only.
-	// Sub-agents (the `agent` task tool, `agentic_fetch`, etc.) run
-	// without hook interception to avoid firing the user's hook N times
-	// per delegated turn. The top-level invocation of the sub-agent tool
-	// itself is still wrapped from the coder's side.
-	filteredTools = wrapToolsWithHooks(filteredTools, hookRunner, isSubAgent)
-
 	// Shadow checkpoints wrap the mutating tools of the top-level agent
 	// only: sub-agents run on the same working directory, so the next
-	// top-level snapshot picks their changes up anyway.
+	// top-level snapshot picks their changes up anyway. Checkpoints are
+	// inside the pipeline so a denied call never takes a snapshot.
 	if !isSubAgent {
 		filteredTools = wrapCheckpointTools(filteredTools, c.shadow)
+	}
+
+	// Every tool goes through one dispatch pipeline. Hooks remain top-level
+	// only to avoid firing the user's hook N times per delegated turn; the
+	// pipeline itself still applies approval, guards, timeout, and
+	// normalization to sub-agents.
+	filteredTools = wrapToolsWithPipeline(filteredTools, c.permissions, hookRunner, isSubAgent)
+	if eventLog, ok := c.sessions.(session.EventLogService); ok {
+		filteredTools = withToolRecorder(filteredTools, newSessionToolEventRecorder(eventLog))
 	}
 
 	return filteredTools, nil

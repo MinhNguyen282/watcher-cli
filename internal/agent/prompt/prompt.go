@@ -267,7 +267,9 @@ func getGitBranch(dir string) string {
 }
 
 func getGitStatusSummary(ctx context.Context, sh *shell.Shell) (string, error) {
-	out, _, err := sh.Exec(ctx, "git status --short 2>/dev/null | head -20")
+	// No pipes: this runs on every prompt build and must work on hosts
+	// without POSIX utilities such as head.
+	out, _, err := sh.Exec(ctx, "git status --short")
 	if err != nil {
 		return "", nil
 	}
@@ -275,11 +277,16 @@ func getGitStatusSummary(ctx context.Context, sh *shell.Shell) (string, error) {
 	if out == "" {
 		return "Status: clean\n", nil
 	}
+	if lines := strings.Split(out, "\n"); len(lines) > 20 {
+		out = strings.Join(lines[:20], "\n")
+	}
 	return fmt.Sprintf("Status:\n%s\n", out), nil
 }
 
 func getGitRecentCommits(ctx context.Context, sh *shell.Shell) (string, error) {
-	out, _, err := sh.Exec(ctx, "git log --oneline -n 3 2>/dev/null")
+	// No stderr redirection: the embedded shell handles git's diagnostics
+	// without requiring a POSIX shell helper.
+	out, _, err := sh.Exec(ctx, "git log --oneline -n 3")
 	if err != nil || out == "" {
 		return "", nil
 	}

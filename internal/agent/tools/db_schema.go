@@ -83,7 +83,7 @@ func lookupDB(
 	if sessionID == "" {
 		return dbcfg, fmt.Errorf("session ID is required for database access")
 	}
-	granted, err := permissions.Request(ctx, permission.CreatePermissionRequest{
+	outcome, err := RequestApproval(ctx, permissions, permission.CreatePermissionRequest{
 		SessionID:   sessionID,
 		Path:        "db:" + name,
 		ToolCallID:  call.ID,
@@ -95,7 +95,7 @@ func lookupDB(
 	if err != nil {
 		return dbcfg, err
 	}
-	if !granted {
+	if outcome != ApprovalAllowedOnce {
 		return dbcfg, errPermissionDenied
 	}
 	if resolve != nil {

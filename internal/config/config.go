@@ -474,19 +474,53 @@ type Options struct {
 	// the SQLite database and workspace overrides. Relative paths are
 	// resolved against the working directory; absolute paths are used
 	// verbatim. After defaulting the stored value is always absolute.
-	DataDirectory             string       `json:"data_directory,omitempty" jsonschema:"description=Directory for storing application data. Relative paths are resolved against the working directory; absolute paths are used as-is.,default=.crush,example=.crush"`
-	DisabledTools             []string     `json:"disabled_tools,omitempty" jsonschema:"description=List of built-in tools to disable and hide from the agent,example=bash,example=sourcegraph"`
-	DisableProviderAutoUpdate bool         `json:"disable_provider_auto_update,omitempty" jsonschema:"description=Disable providers auto-update,default=false"`
-	DisableDefaultProviders   bool         `json:"disable_default_providers,omitempty" jsonschema:"description=Ignore all default/embedded providers. When enabled\\, providers must be fully specified in the config file with base_url\\, models\\, and api_key - no merging with defaults occurs,default=false"`
-	Attribution               *Attribution `json:"attribution,omitempty" jsonschema:"description=Attribution settings for generated content"`
-	DisableMetrics            bool         `json:"disable_metrics,omitempty" jsonschema:"description=Disable sending metrics,default=false"`
-	InitializeAs              string       `json:"initialize_as,omitempty" jsonschema:"description=Name of the context file to create/update during project initialization,default=AGENTS.md,example=AGENTS.md,example=CRUSH.md,example=CLAUDE.md,example=docs/LLMs.md"`
-	AutoLSP                   *bool        `json:"auto_lsp,omitempty" jsonschema:"description=Automatically setup LSPs based on root markers,default=true"`
-	Progress                  *bool        `json:"progress,omitempty" jsonschema:"description=Show indeterminate progress updates during long operations,default=true"`
-	Notifications             string       `json:"notifications,omitempty" jsonschema:"description=Notification style to use. Options: auto (default)\\, native\\, osc\\, bell\\, disabled. Auto selects based on environment: native for local sessions\\, osc for SSH (with automatic OSC 99/777 detection).,enum=auto,enum=native,enum=osc,enum=bell,enum=disabled,default=auto"`
-	DisabledSkills            []string     `json:"disabled_skills,omitempty" jsonschema:"description=List of skill names to disable and hide from the agent,example=crush-config"`
-	RequestTimeout            *int         `json:"request_timeout,omitempty" jsonschema:"description=Timeout in seconds for each LLM API request. Streaming responses are aborted only after this much inactivity between tokens\\, so slow but active streams are never killed; the wait for the first token gets at least five minutes for prompt prefill. 0 disables it\\, negative values are invalid.,default=60,example=120,example=300,example=0"`
-	MaxBackgroundJobs         *int         `json:"max_background_jobs,omitempty" jsonschema:"description=How many background shell jobs may run at once. Jobs that have finished never count against it. 0 or negative restores the default.,default=50,example=10,example=200"`
+	DataDirectory             string                    `json:"data_directory,omitempty" jsonschema:"description=Directory for storing application data. Relative paths are resolved against the working directory; absolute paths are used as-is.,default=.crush,example=.crush"`
+	DisabledTools             []string                  `json:"disabled_tools,omitempty" jsonschema:"description=List of built-in tools to disable and hide from the agent,example=bash,example=sourcegraph"`
+	DisableProviderAutoUpdate bool                      `json:"disable_provider_auto_update,omitempty" jsonschema:"description=Disable providers auto-update,default=false"`
+	DisableDefaultProviders   bool                      `json:"disable_default_providers,omitempty" jsonschema:"description=Ignore all default/embedded providers. When enabled\\, providers must be fully specified in the config file with base_url\\, models\\, and api_key - no merging with defaults occurs,default=false"`
+	Attribution               *Attribution              `json:"attribution,omitempty" jsonschema:"description=Attribution settings for generated content"`
+	DisableMetrics            bool                      `json:"disable_metrics,omitempty" jsonschema:"description=Disable sending metrics,default=false"`
+	InitializeAs              string                    `json:"initialize_as,omitempty" jsonschema:"description=Name of the context file to create/update during project initialization,default=AGENTS.md,example=AGENTS.md,example=CRUSH.md,example=CLAUDE.md,example=docs/LLMs.md"`
+	AutoLSP                   *bool                     `json:"auto_lsp,omitempty" jsonschema:"description=Automatically setup LSPs based on root markers,default=true"`
+	Progress                  *bool                     `json:"progress,omitempty" jsonschema:"description=Show indeterminate progress updates during long operations,default=true"`
+	Notifications             string                    `json:"notifications,omitempty" jsonschema:"description=Notification style to use. Options: auto (default)\\, native\\, osc\\, bell\\, disabled. Auto selects based on environment: native for local sessions\\, osc for SSH (with automatic OSC 99/777 detection).,enum=auto,enum=native,enum=osc,enum=bell,enum=disabled,default=auto"`
+	DisabledSkills            []string                  `json:"disabled_skills,omitempty" jsonschema:"description=List of skill names to disable and hide from the agent,example=crush-config"`
+	RequestTimeout            *int                      `json:"request_timeout,omitempty" jsonschema:"description=Timeout in seconds for each LLM API request. Streaming responses are aborted only after this much inactivity between tokens\\, so slow but active streams are never killed; the wait for the first token gets at least five minutes for prompt prefill. 0 disables it\\, negative values are invalid.,default=60,example=120,example=300,example=0"`
+	MaxBackgroundJobs         *int                      `json:"max_background_jobs,omitempty" jsonschema:"description=How many background shell jobs may run at once. Jobs that have finished never count against it. 0 or negative restores the default.,default=50,example=10,example=200"`
+	ContextCompaction         *ContextCompactionOptions `json:"context_compaction,omitempty" jsonschema:"description=Automatic conversation compaction thresholds. Thresholds are compared against context tokens only, never output tokens."`
+}
+
+// ContextCompactionOptions controls when automatic compaction runs.
+// HeadroomTokens wins when set; otherwise ThresholdRatio is the fraction
+// of the context window that must remain before compaction triggers.
+type ContextCompactionOptions struct {
+	HeadroomTokens int64   `json:"headroom_tokens,omitempty" jsonschema:"description=Compact when this many context tokens remain. 0 falls back to threshold_ratio.,example=20000"`
+	ThresholdRatio float64 `json:"threshold_ratio,omitempty" jsonschema:"description=Compact when the remaining context window falls below this fraction. Values outside 0.05-0.9 are clamped.,example=0.2"`
+}
+
+// Normalized returns validated compaction thresholds for a context window.
+// A zero window means the budget is unknown and compaction is disabled.
+func (o *Options) NormalizedContextCompaction(window int64) (headroom int64, ratio float64) {
+	if o != nil && o.ContextCompaction != nil {
+		headroom = o.ContextCompaction.HeadroomTokens
+		ratio = o.ContextCompaction.ThresholdRatio
+	}
+	if window <= 0 {
+		return 0, 0
+	}
+	if headroom < 0 {
+		headroom = 0
+	}
+	if headroom > window/2 {
+		headroom = window / 2
+	}
+	if ratio <= 0 || ratio > 0.9 {
+		ratio = 0.2
+	}
+	if ratio < 0.05 {
+		ratio = 0.05
+	}
+	return headroom, ratio
 }
 
 // DefaultMaxBackgroundJobs is how many background shell jobs may run at once

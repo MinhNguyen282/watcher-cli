@@ -49,14 +49,7 @@ import (
 	"github.com/charmbracelet/x/exp/charmtone"
 )
 
-const (
-	DefaultSessionName = "Untitled Session"
-
-	// Constants for auto-summarization thresholds
-	largeContextWindowThreshold = 200_000
-	largeContextWindowBuffer    = 20_000
-	smallContextWindowRatio     = 0.2
-)
+const DefaultSessionName = "Untitled Session"
 
 var userAgent = fmt.Sprintf("Charm-Crush/%s (https://charm.land/crush)", version.Version)
 
@@ -218,6 +211,7 @@ type sessionAgent struct {
 	// turns; sendChannelReply treats nil as "routing disabled".
 	cfg                  *config.ConfigStore
 	disableAutoSummarize bool
+	contextOptions       *config.Options
 	isYolo               bool
 	notify               pubsub.Publisher[notify.Notification]
 	runComplete          pubsub.Publisher[notify.RunComplete]
@@ -271,6 +265,7 @@ type SessionAgentOptions struct {
 	SystemPrompt         string
 	IsSubAgent           bool
 	DisableAutoSummarize bool
+	ContextOptions       *config.Options
 	IsYolo               bool
 	Sessions             session.Service
 	Messages             message.Service
@@ -292,6 +287,7 @@ func NewSessionAgent(
 		messages:             opts.Messages,
 		cfg:                  opts.Cfg,
 		disableAutoSummarize: opts.DisableAutoSummarize,
+		contextOptions:       opts.ContextOptions,
 		tools:                csync.NewSliceFrom(opts.Tools),
 		isYolo:               opts.IsYolo,
 		notify:               opts.Notify,
@@ -1109,21 +1105,16 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		},
 		StopWhen: []fantasy.StopCondition{
 			func(_ []fantasy.StepResult) bool {
-				cw := int64(largeModel.CatwalkCfg.ContextWindow)
-				// If context window is unknown (0), skip auto-summarize
-				// to avoid immediately truncating custom/local models.
-				if cw == 0 {
+				budget := newContextBudget(int64(largeModel.CatwalkCfg.ContextWindow), a.contextOptions)
+				// If the context window is unknown, skip auto-summarize to
+				// avoid immediately truncating custom/local models.
+				if budget.window == 0 || a.disableAutoSummarize {
 					return false
 				}
-				tokens := currentSession.CompletionTokens + currentSession.PromptTokens
-				remaining := cw - tokens
-				var threshold int64
-				if cw > largeContextWindowThreshold {
-					threshold = largeContextWindowBuffer
-				} else {
-					threshold = int64(float64(cw) * smallContextWindowRatio)
-				}
-				if (remaining <= threshold) && !a.disableAutoSummarize {
+				// PromptTokens is already the context size: cached, cache
+				// creation, and uncached input are all counted there.
+				// Completion tokens are output and must not be added.
+				if budget.shouldCompact(currentSession.PromptTokens) {
 					shouldSummarize = true
 					return true
 				}
@@ -1407,9 +1398,19 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		}
 	}()
 
+	// Summarize with the real system prompt and history as a warm prefix so
+	// the provider can reuse its cache. The summary instruction is appended
+	// to the final user message instead of replacing the system prompt.
+	systemPrompt := a.systemPrompt.Get()
+	if prefix := a.systemPromptPrefix.Get(); prefix != "" {
+		systemPrompt = prefix + "\n\n" + systemPrompt
+	}
+	if strings.TrimSpace(systemPrompt) == "" {
+		systemPrompt = string(summaryPrompt)
+	}
 	agent := fantasy.NewAgent(
 		largeModel.Model,
-		fantasy.WithSystemPrompt(string(summaryPrompt)),
+		fantasy.WithSystemPrompt(systemPrompt),
 		fantasy.WithUserAgent(userAgent),
 	)
 	summaryMessage, err := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
@@ -1422,7 +1423,7 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		return err
 	}
 
-	summaryPromptText := buildSummaryPrompt(currentSession.Todos)
+	summaryPromptText := string(summaryPrompt) + "\n\n" + buildSummaryPrompt(currentSession.Todos)
 
 	resp, err := agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:          summaryPromptText,
@@ -1487,6 +1488,16 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 			}
 			openrouterCost = &newCost
 		}
+	}
+
+	// A summary cut off by the output limit is not a summary. Drop it
+	// rather than persisting a partial transcript that would replace the
+	// session's real history.
+	if resp.Response.FinishReason == fantasy.FinishReasonLength {
+		if deleteErr := a.messages.Delete(ctx, summaryMessage.ID); deleteErr != nil {
+			slog.Warn("Failed to delete truncated summary message", "error", deleteErr)
+		}
+		return errors.New("summary was truncated by the output token limit; not saved")
 	}
 
 	summaryMessage.AddFinish(message.FinishReasonEndTurn, "", "")

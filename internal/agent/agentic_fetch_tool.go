@@ -86,8 +86,9 @@ func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (
 				description += " (uses DeepSeek Search/Fetch APIs, which may be billed separately per successful request)"
 			}
 
-			p, err := c.permissions.Request(
+			outcome, err := tools.RequestApproval(
 				ctx,
+				c.permissions,
 				permission.CreatePermissionRequest{
 					SessionID:   validationResult.SessionID,
 					Path:        c.cfg.WorkingDir(),
@@ -101,7 +102,7 @@ func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
-			if !p {
+			if outcome != tools.ApprovalAllowedOnce {
 				return tools.NewPermissionDeniedResponse(), nil
 			}
 
@@ -216,6 +217,7 @@ func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (
 				SystemPromptPrefix:   smallProviderCfg.SystemPromptPrefix,
 				SystemPrompt:         systemPrompt,
 				DisableAutoSummarize: c.cfg.Config().Options.DisableAutoSummarize,
+				ContextOptions:       c.cfg.Config().Options,
 				IsYolo:               c.permissions.SkipRequests(),
 				Sessions:             c.sessions,
 				Messages:             c.messages,

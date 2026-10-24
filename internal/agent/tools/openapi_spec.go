@@ -42,7 +42,7 @@ func NewOpenAPISpecTool(permissions permission.Service, workingDir string) fanta
 			if sessionID == "" {
 				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for reading spec files")
 			}
-			granted, err := permissions.Request(ctx, permission.CreatePermissionRequest{
+			outcome, err := RequestApproval(ctx, permissions, permission.CreatePermissionRequest{
 				SessionID:   sessionID,
 				Path:        path,
 				ToolCallID:  call.ID,
@@ -53,7 +53,7 @@ func NewOpenAPISpecTool(permissions permission.Service, workingDir string) fanta
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
-			if !granted {
+			if outcome != ApprovalAllowedOnce {
 				return NewPermissionDeniedResponse(), nil
 			}
 

@@ -73,7 +73,7 @@ func NewVerifyTool(permissions permission.Service, workingDir string, repoMap *r
 			for _, check := range profile.Checks {
 				commandLines = append(commandLines, strings.Join(check.Argv, " "))
 			}
-			granted, err := permissions.Request(ctx, permission.CreatePermissionRequest{
+			outcome, err := RequestApproval(ctx, permissions, permission.CreatePermissionRequest{
 				SessionID:   sessionID,
 				Path:        profile.Root,
 				ToolCallID:  call.ID,
@@ -89,7 +89,7 @@ func NewVerifyTool(permissions permission.Service, workingDir string, repoMap *r
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
-			if !granted {
+			if outcome != ApprovalAllowedOnce {
 				return NewPermissionDeniedResponse(), nil
 			}
 
@@ -109,8 +109,8 @@ func formatVerifyResult(result verify.Result) string {
 	if !result.Passed() {
 		status = "failed"
 	}
-	fmt.Fprintf(&sb, "<verify status=%q profile=%q duration=%s>\n",
-		status, result.Profile.Kind, result.Duration.Round(time.Millisecond))
+	fmt.Fprintf(&sb, "<verify status=%q profile=%q duration=%q>\n",
+		status, result.Profile.Kind, result.Duration.Round(time.Millisecond).String())
 
 	sb.WriteString("checks:\n")
 	for _, check := range result.Checks {

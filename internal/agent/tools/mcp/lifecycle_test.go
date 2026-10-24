@@ -501,7 +501,15 @@ func withLongStdioCheckTimeout(t *testing.T) {
 // thrown away — the exact diagnostic stdioCheck exists to provide. We assert
 // both that the unwrap reaches the command (the error is no longer bare EOF)
 // and that the re-executed child's output surfaces in the joined error.
+func requireSh(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is not available on this host")
+	}
+}
+
 func TestMaybeStdioErr_UnwrapsChannelTransport(t *testing.T) {
+	requireSh(t)
 	withLongStdioCheckTimeout(t)
 	cmd := exec.CommandContext(t.Context(), "sh", "-c", "echo 'startup failed: bad config'; exit 3")
 	inner := &mcp.CommandTransport{Command: cmd}
@@ -517,6 +525,7 @@ func TestMaybeStdioErr_UnwrapsChannelTransport(t *testing.T) {
 // TestMaybeStdioErr_UnwrapsEveryWrapper pins the unwrap against future
 // decorators: it must peel the whole stack, not a fixed number of layers.
 func TestMaybeStdioErr_UnwrapsEveryWrapper(t *testing.T) {
+	requireSh(t)
 	withLongStdioCheckTimeout(t)
 	cmd := exec.CommandContext(t.Context(), "sh", "-c", "echo boom-diagnostic >&2; exit 3")
 	var transport mcp.Transport = &mcp.CommandTransport{Command: cmd}
@@ -534,6 +543,7 @@ func TestMaybeStdioErr_UnwrapsEveryWrapper(t *testing.T) {
 // whole re-ran "sh sh -c ..." — and the error reported that malformed
 // command's failure instead of the child's real startup output.
 func TestStdioCheck_DoesNotDuplicateArgv0(t *testing.T) {
+	requireSh(t)
 	withLongStdioCheckTimeout(t)
 	cmd := exec.CommandContext(t.Context(), "sh", "-c", "echo 'real startup error'; exit 3")
 

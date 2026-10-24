@@ -9,6 +9,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/session"
 )
 
 // Replies recorded for a tool call that will never be answered. They are
@@ -196,6 +197,12 @@ func (a *sessionAgent) ListSettledMessages(ctx context.Context, sessionID string
 		slog.Warn("Failed to settle interrupted tool calls",
 			"session_id", sessionID, "error", err)
 		return a.messages.List(ctx, sessionID)
+	}
+	if eventLog, ok := a.sessions.(session.EventLogService); ok {
+		if _, err := eventLog.RepairInterruptedEvents(ctx, sessionID); err != nil {
+			slog.Warn("Failed to repair interrupted session events",
+				"session_id", sessionID, "error", err)
+		}
 	}
 	return settled, nil
 }
