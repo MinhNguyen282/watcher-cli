@@ -415,6 +415,7 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 				continue
 			}
 		}
+		prepared = normalizeProviderEfforts(prepared)
 		c.Providers.Set(string(p.ID), prepared)
 	}
 
@@ -458,6 +459,7 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 		if models, ok := discovered[id]; ok {
 			providerConfig.Models = mergeModels(providerConfig.Models, models)
 		}
+		providerConfig = normalizeProviderEfforts(providerConfig)
 
 		if len(providerConfig.Models) == 0 {
 			slog.Warn("Skipping custom provider because the provider has no models", "provider", id)

@@ -68,6 +68,57 @@ func TestNormalizeDeepSeekCatalogLeavesNonReasoningModels(t *testing.T) {
 	require.Empty(t, model.DefaultReasoningEffort)
 }
 
+func TestNormalizeProviderEfforts(t *testing.T) {
+	t.Parallel()
+	provider := ProviderConfig{
+		ID:   "deepseek",
+		Type: catwalk.TypeOpenAICompat,
+		Models: []catwalk.Model{
+			{ID: "deepseek-flash", CanReason: true},
+			{ID: "deepseek-v4-pro", CanReason: true},
+			{ID: "some-local-model"},
+		},
+	}
+
+	got := normalizeProviderEfforts(provider)
+
+	for _, model := range got.Models[:2] {
+		require.True(t, model.CanReason)
+		require.Equal(t, []string{"low", "high", "max", "none"}, model.ReasoningLevels)
+		require.Equal(t, "high", model.DefaultReasoningEffort)
+	}
+	require.Equal(t, provider.Models[2], got.Models[2], "Non-DeepSeek models must be untouched")
+	require.Empty(t, provider.Models[0].ReasoningLevels, "Input must not be mutated")
+}
+
+func TestNormalizeProviderEffortsPreservesExplicitLevels(t *testing.T) {
+	t.Parallel()
+	provider := ProviderConfig{Models: []catwalk.Model{{
+		ID:                     "deepseek-flash",
+		CanReason:              true,
+		ReasoningLevels:        []string{"low", "max"},
+		DefaultReasoningEffort: "max",
+	}}}
+
+	got := normalizeProviderEfforts(provider)
+
+	require.Equal(t, []string{"low", "max"}, got.Models[0].ReasoningLevels)
+	require.Equal(t, "max", got.Models[0].DefaultReasoningEffort)
+}
+
+func TestConfigureProvidersAddsDeepSeekEffortsToCustomProvider(t *testing.T) {
+	t.Parallel()
+	_, cfg := configureCustom(t, t.TempDir(), ProviderConfig{
+		BaseURL: "https://api.deepseek.com",
+		Models:  []catwalk.Model{{ID: "deepseek-flash", CanReason: true}},
+	})
+
+	provider, ok := cfg.Providers.Get("local")
+	require.True(t, ok)
+	require.Equal(t, []string{"low", "high", "max", "none"}, provider.Models[0].ReasoningLevels)
+	require.Equal(t, "high", provider.Models[0].DefaultReasoningEffort)
+}
+
 func TestResolveDeepSeekLegacySlotsStayOnFlash(t *testing.T) {
 	t.Parallel()
 	providers := normalizeDeepSeekCatalog([]catwalk.Provider{{

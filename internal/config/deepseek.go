@@ -63,6 +63,21 @@ func normalizeDeepSeekCatalog(providers []catwalk.Provider) []catwalk.Provider {
 	return result
 }
 
+// normalizeProviderEfforts fills in DeepSeek reasoning metadata for models
+// declared on a provider config. Custom providers never pass through the
+// catalog path, so without this they expose reasoning without any effort
+// levels and the TUI hides the effort commands.
+func normalizeProviderEfforts(provider ProviderConfig) ProviderConfig {
+	provider.Models = slices.Clone(provider.Models)
+	for i, model := range provider.Models {
+		if !isDeepSeekReasoningModel(model.ID) {
+			continue
+		}
+		provider.Models[i] = withDeepSeekEffort(model)
+	}
+	return provider
+}
+
 // withDeepSeekEffort applies DeepSeek's thinking-mode effort levels when
 // the catalog does not provide them. DeepSeek accepts low, high, and max,
 // with high as the documented default; none disables thinking mode.
