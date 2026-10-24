@@ -55,3 +55,6 @@ completions/crush.*sh
 .prettierignore
 .task
 .watcher/
+
+# Claude Code local overrides
+.claude/settings.local.json
