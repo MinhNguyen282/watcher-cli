@@ -16,6 +16,7 @@ implement mà không cần khảo sát lại từ đầu.
 | 5 | [05-sdlc-review-db-inspector.md](05-sdlc-review-db-inspector.md) | ⭐⭐⭐→⭐⭐⭐⭐ | 01 (cho phần 5C) | Chia 3 phần 5A/5B/5C, delegate riêng từng phần. |
 | 6 | [06-verify-live-repomap.md](06-verify-live-repomap.md) | ⭐⭐⭐ | — | Vòng verify tất định + repo map incremental, ưu tiên cho coding task. |
 | 7 | [07-deepseek-effort-commands.md](07-deepseek-effort-commands.md) | ⭐ | — | `/efforts` cho DeepSeek (low/high/max/none) + best practices từ deepseek-harness. |
+| 8 | [08-deepseek-harness-best-practices.md](08-deepseek-harness-best-practices.md) | ⭐⭐⭐⭐ | — | Kế hoạch đầy đủ áp dụng tool pipeline, job/session, compaction, UI, testing từ deepseek-harness. |
 
 ## Hướng dẫn delegate cho agent
 
@@ -63,3 +64,4 @@ Khi giao việc, kèm theo prompt mẫu sau (thay `<PLAN>` và `<PHASE>`):
 - [ ] 05C — Split-Pane Diff Viewer
 - [x] 06 — Verify tool + live incremental repo map
 - [x] 07 — DeepSeek `/efforts` commands and effort levels
+- [ ] 08 — DeepSeek Harness best-practices adoption plan
