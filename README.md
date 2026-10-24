@@ -131,6 +131,12 @@ under `.crush/` by default; repository-map and harness data live under `.watcher
 | Database/API inspection | `db_schema`, `db_query`, and `openapi_spec` inspect configured databases and local API specifications through the existing permission flow. |
 | Jev observer | Optional structured pre-turn suggestions for intent, complexity, model tier, skill, and review needs. Observe mode leaves agent behavior unchanged. |
 
+Background output reads return immediately by default. With `wait=true`,
+`job_output` waits up to 10 seconds; `timeout_seconds` can set a 1–30 second
+wait. A timeout returns the current logs and `Status: running`, leaving the
+job alive. For dev servers, inspect logs with `wait=false` and check HTTP
+readiness separately instead of waiting for the server process to exit.
+
 ### Database and API inspectors
 
 Declare connections in `crushrc`, using environment references for credentials:
