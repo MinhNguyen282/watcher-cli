@@ -30,6 +30,9 @@ func isolateProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setsid = true
 }
 
+// runDispatchedCommand preserves the Unix shebang execution path.
+func runDispatchedCommand(cmd *exec.Cmd) error { return cmd.Run() }
+
 // processGroupExecHandler returns an ExecHandlerFunc that replaces
 // interp.DefaultExecHandler with one that fully isolates child processes
 // from Crush's session and controlling terminal.

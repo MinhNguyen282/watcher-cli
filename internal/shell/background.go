@@ -19,6 +19,8 @@ const (
 	// CompletedJobRetention is how long a finished job's output stays
 	// readable.
 	CompletedJobRetention = 8 * time.Hour
+	// BackgroundKillTimeout bounds cancellation and output-pipe cleanup.
+	BackgroundKillTimeout = 10 * time.Second
 )
 
 // syncBuffer is a thread-safe wrapper around bytes.Buffer.
@@ -188,12 +190,33 @@ func (m *BackgroundShellManager) Remove(id string) error {
 
 // Kill terminates a background shell by ID.
 func (m *BackgroundShellManager) Kill(id string) error {
-	shell, err := m.take(id)
-	if err != nil {
-		return err
+	return m.KillContext(context.Background(), id)
+}
+
+// KillContext cancels a job and waits for bounded cleanup. A job that has not
+// finished remains tracked so callers can inspect its output or retry.
+func (m *BackgroundShellManager) KillContext(ctx context.Context, id string) error {
+	shell, ok := m.Get(id)
+	if !ok {
+		return fmt.Errorf("background shell not found: %s", id)
 	}
 	shell.cancel()
-	<-shell.done
+	ctx, cancel := context.WithTimeout(ctx, BackgroundKillTimeout)
+	defer cancel()
+	select {
+	case <-shell.done:
+	default:
+		select {
+		case <-shell.done:
+		case <-ctx.Done():
+			return fmt.Errorf("background shell %s cleanup did not finish; termination requested and job is still tracked: %w", id, ctx.Err())
+		}
+	}
+	m.mu.Lock()
+	if m.shells[id] == shell {
+		delete(m.shells, id)
+	}
+	m.mu.Unlock()
 	return nil
 }
 

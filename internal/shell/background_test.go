@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -10,6 +11,42 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestBackgroundShellManager_KillContextTimeoutKeepsJob(t *testing.T) {
+	t.Parallel()
+	manager := newBackgroundShellManager()
+	canceled := false
+	job := &BackgroundShell{ID: "stubborn", done: make(chan struct{}), cancel: func() { canceled = true }}
+	manager.shells[job.ID] = job
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	err := manager.KillContext(ctx, job.ID)
+	require.True(t, errors.Is(err, context.DeadlineExceeded))
+	require.True(t, canceled)
+	tracked, ok := manager.Get(job.ID)
+	require.True(t, ok)
+	require.Same(t, job, tracked)
+	close(job.done)
+	require.NoError(t, manager.KillContext(t.Context(), job.ID))
+	_, ok = manager.Get(job.ID)
+	require.False(t, ok)
+}
+
+func TestBackgroundShellManager_KillContextCanceled(t *testing.T) {
+	t.Parallel()
+	manager := newBackgroundShellManager()
+	job := &BackgroundShell{ID: "pending", done: make(chan struct{}), cancel: func() {}}
+	manager.shells[job.ID] = job
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := manager.KillContext(ctx, job.ID)
+	require.ErrorIs(t, err, context.Canceled)
+	_, ok := manager.Get(job.ID)
+	require.True(t, ok)
+	close(job.done)
+	// Completed jobs can be removed even when the caller was canceled.
+	require.NoError(t, manager.KillContext(ctx, job.ID))
+}
 
 func TestBackgroundShellManager_Start(t *testing.T) {
 	t.Skip("Skipping this until I figure out why its flaky")
