@@ -64,8 +64,11 @@ func (g *Graph) parseFallbackFile(root, file string, data []byte) {
 		}
 	case "py":
 		for _, m := range pyImportRe.FindAllStringSubmatchIndex(text, -1) {
-			target := text[m[2]:m[3]]
-			if target == "" {
+			// Unmatched alternative captures have indices of -1.
+			var target string
+			if m[2] >= 0 {
+				target = text[m[2]:m[3]]
+			} else if m[4] >= 0 {
 				target = text[m[4]:m[5]]
 			}
 			if target != "" {
