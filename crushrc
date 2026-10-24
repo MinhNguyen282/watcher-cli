@@ -1,0 +1,13 @@
+provider add deepseek --type openai-compat \
+  --base-url "https://api.deepseek.com" \
+  
+
+# Model metadata comes from the saved DeepSeek provider configuration.
+
+model large deepseek/deepseek-flash --max-tokens 65536
+model small deepseek/deepseek-flash --max-tokens 8192
+model fast deepseek/deepseek-flash --max-tokens 8192
+
+option jev-observe true
+# Use only explicitly configured providers; keep the saved DeepSeek credential.
+option default-providers false
