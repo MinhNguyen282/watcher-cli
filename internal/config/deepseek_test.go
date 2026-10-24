@@ -119,6 +119,35 @@ func TestConfigureProvidersAddsDeepSeekEffortsToCustomProvider(t *testing.T) {
 	require.Equal(t, "high", provider.Models[0].DefaultReasoningEffort)
 }
 
+func TestLoadCustomDeepSeekProviderAddsEffortLevels(t *testing.T) {
+	globalDir := t.TempDir()
+	workDir := t.TempDir()
+	t.Setenv("CRUSH_GLOBAL_CONFIG", globalDir)
+	t.Setenv("CRUSH_GLOBAL_DATA", globalDir)
+	writeGlobalConfig(t, globalDir, `{
+		"options": {"disable_default_providers": true},
+		"providers": {"deepseek": {
+			"base_url": "https://api.deepseek.com",
+			"type": "openai-compat",
+			"api_key": "test-key",
+			"models": [{"id": "deepseek-flash", "can_reason": true}]
+		}},
+		"models": {
+			"large": {"provider": "deepseek", "model": "deepseek-flash", "think": true},
+			"small": {"provider": "deepseek", "model": "deepseek-flash"}
+		}
+	}`)
+
+	cfg := loadIsolated(t, workDir).Config()
+
+	model := cfg.GetModelByType(SelectedModelTypeLarge)
+	require.NotNil(t, model)
+	require.Equal(t, []string{"low", "high", "max", "none"}, model.ReasoningLevels)
+	require.Equal(t, "high", model.DefaultReasoningEffort)
+	require.Equal(t, "high", cfg.Models[SelectedModelTypeLarge].ReasoningEffort)
+	require.NoError(t, cfg.ValidateReasoningEffort("deepseek", "deepseek-flash", "max"))
+}
+
 func TestResolveDeepSeekLegacySlotsStayOnFlash(t *testing.T) {
 	t.Parallel()
 	providers := normalizeDeepSeekCatalog([]catwalk.Provider{{
