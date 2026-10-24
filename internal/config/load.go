@@ -1442,16 +1442,46 @@ func ProjectSkillsDir(workingDir string) []string {
 
 func isAppleTerminal() bool { return os.Getenv("TERM_PROGRAM") == "Apple_Terminal" }
 
+// hookEventNames is the canonical hook event surface. It mirrors the event
+// constants in internal/hooks; the duplication is deliberate because hooks
+// imports config and config must not import hooks.
+var hookEventNames = []string{
+	"PreToolUse",
+	"PostToolUse",
+	"PostToolUseFailure",
+	"PermissionRequest",
+	"PermissionDenied",
+	"UserPromptSubmit",
+	"SessionStart",
+	"Stop",
+	"SubagentStart",
+	"SubagentStop",
+	"PreCompact",
+	"PostCompact",
+	"FileChanged",
+	"CwdChanged",
+	"InstructionsLoaded",
+	"TaskCreated",
+	"TaskCompleted",
+	"Notification",
+	"MessageDisplay",
+}
+
+// hookEventIndex maps the normalized (lowercase, no underscores) form of an
+// event name to its canonical spelling.
+var hookEventIndex = func() map[string]string {
+	index := make(map[string]string, len(hookEventNames))
+	for _, name := range hookEventNames {
+		index[strings.ToLower(strings.ReplaceAll(name, "_", ""))] = name
+	}
+	return index
+}()
+
 // normalizeHookEvent maps user-provided event names to their canonical
 // form. Matching is case-insensitive and accepts snake_case variants
-// (e.g. "pre_tool_use" → "PreToolUse").
+// (e.g. "pre_tool_use" → "PreToolUse"). Unknown names return "".
 func normalizeHookEvent(name string) string {
-	switch strings.ToLower(strings.ReplaceAll(name, "_", "")) {
-	case "pretooluse":
-		return "PreToolUse"
-	default:
-		return name
-	}
+	return hookEventIndex[strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "_", ""))]
 }
 
 // ValidateHooks normalizes event names and checks that every configured
@@ -1460,9 +1490,13 @@ func normalizeHookEvent(name string) string {
 // only validates up front so the user sees config errors at load time
 // rather than on the first tool call.
 func (c *Config) ValidateHooks() error {
-	// Normalize event name keys.
+	// Normalize event name keys. An unknown event is a configuration
+	// error: a hook that never fires is worse than a startup failure.
 	for event, eventHooks := range c.Hooks {
 		canonical := normalizeHookEvent(event)
+		if canonical == "" {
+			return fmt.Errorf("hook: unknown event %q: must be one of %s", event, strings.Join(hookEventNames, ", "))
+		}
 		if canonical != event {
 			c.Hooks[canonical] = append(c.Hooks[canonical], eventHooks...)
 			delete(c.Hooks, event)

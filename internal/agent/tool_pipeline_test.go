@@ -203,3 +203,52 @@ func TestPipelineRecordsOneIntentAndOneResult(t *testing.T) {
 	require.Equal(t, int64(1), recorder.intents.Load())
 	require.Equal(t, int64(1), recorder.results.Load())
 }
+
+func TestPipelinePlanModeDeniesMutatingTools(t *testing.T) {
+	t.Parallel()
+
+	var executed atomic.Int64
+	inner := &pipelineTestTool{
+		name: tools.EditToolName,
+		run: func(context.Context, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			executed.Add(1)
+			return fantasy.NewTextResponse("edited"), nil
+		},
+	}
+	perms := permission.NewPermissionService(t.TempDir(), false, nil)
+	modeService, ok := perms.(permission.ModeService)
+	require.True(t, ok)
+	modeService.SetMode(permission.ModePlan)
+
+	pipeline := newPipeline(inner, perms, time.Second)
+	response, err := pipeline.Run(t.Context(), fantasy.ToolCall{
+		ID:    "call-plan",
+		Name:  tools.EditToolName,
+		Input: `{"file_path":"main.go"}`,
+	})
+	require.NoError(t, err)
+	require.True(t, response.IsError)
+	require.Contains(t, response.Content, "plan mode is read-only")
+	require.Zero(t, executed.Load(), "a mutating tool ran in plan mode")
+}
+
+func TestPipelinePlanModeAllowsReadOnlyTools(t *testing.T) {
+	t.Parallel()
+
+	var executed atomic.Int64
+	inner := &pipelineTestTool{
+		name: tools.GrepToolName,
+		run: func(context.Context, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			executed.Add(1)
+			return fantasy.NewTextResponse("match"), nil
+		},
+	}
+	perms := permission.NewPermissionService(t.TempDir(), false, nil)
+	perms.(permission.ModeService).SetMode(permission.ModePlan)
+
+	pipeline := newPipeline(inner, perms, time.Second)
+	response, err := pipeline.Run(t.Context(), fantasy.ToolCall{ID: "call-read", Name: tools.GrepToolName, Input: `{"pattern":"x"}`})
+	require.NoError(t, err)
+	require.False(t, response.IsError, response.Content)
+	require.EqualValues(t, 1, executed.Load())
+}

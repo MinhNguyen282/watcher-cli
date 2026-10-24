@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/tidwall/sjson"
 )
 
 const (
@@ -185,15 +186,79 @@ func (p *toolPipeline) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		}
 	}
 
-	ctx = tools.WithApprover(ctx, p.approve)
+	if reason := p.modeGuard(call); reason != "" {
+		resp := withToolOutcomeMetadata(
+			fantasy.NewTextErrorResponse("Tool call denied: "+reason),
+			toolOutcomeMetadata{Outcome: "denied", Reason: reason, DurationMS: time.Since(started).Milliseconds()},
+		)
+		p.recordResult(ctx, call, resp, "denied")
+		return resp, nil
+	}
+
+	ctx = tools.WithApprover(ctx, p.approver(call.Input))
 
 	response, outcome := p.execute(ctx, call)
-	response = p.finalize(ctx, response, outcome)
+	response = p.emitToolOutcome(ctx, call, response, outcome)
+	response = p.attachPermissionStage(ctx, call, response)
+	response = p.finalize(ctx, call, response, outcome)
 	p.recordResult(ctx, call, response, outcome)
 	slog.Debug("Tool call finished",
 		"tool", call.Name, "tool_call_id", call.ID, "session_id", sessionID,
 		"outcome", outcome, "duration_ms", time.Since(started).Milliseconds())
 	return response, nil
+}
+
+// modeGuard enforces mode-level restrictions that must hold even for tools
+// that never request approval. Plan mode is read-only, so a mutating tool is
+// refused here instead of relying on the tool to ask.
+func (p *toolPipeline) modeGuard(call fantasy.ToolCall) string {
+	modeService, ok := p.permissions.(permission.ModeService)
+	if !ok {
+		return ""
+	}
+	if modeService.Mode() != permission.ModePlan {
+		return ""
+	}
+	if !tools.IsMutating(call.Name) {
+		return ""
+	}
+	return "plan mode is read-only, and " + call.Name + " can change state"
+}
+
+// approver binds the current call's input to the approval stage so rule
+// content is derived from what the model actually sent.
+func (p *toolPipeline) approver(input string) tools.Approver {
+	return func(ctx context.Context, req permission.CreatePermissionRequest) (tools.ApprovalOutcome, error) {
+		spec, _ := tools.SpecFor(req.ToolName)
+		req.Mutating = spec.Mutating
+		req.ReadOnly = spec.ReadOnly
+		if req.RuleContent == "" {
+			req.RuleContent = tools.RuleContentFor(req.ToolName, input)
+		}
+
+		// PermissionRequest runs only for calls that would prompt. A hook
+		// allow is stamped as a hook approval so the permission service
+		// records the provenance; a hook deny skips the prompt entirely.
+		if p.runner != nil && p.runner.HasEvent(hooks.EventPermissionRequest) {
+			result, err := p.runner.Run(ctx, hooks.EventPermissionRequest, tools.GetSessionFromContext(ctx), req.ToolName, input)
+			if err != nil {
+				slog.Warn("PermissionRequest hook failed, continuing", "tool", req.ToolName, "error", err)
+			}
+			switch {
+			case result.Decision == hooks.DecisionDeny || result.Halt:
+				p.emitPermissionDenied(ctx, req, "denied by hook: "+result.Reason)
+				return tools.ApprovalRejected, nil
+			case result.Decision == hooks.DecisionAllow:
+				ctx = permission.WithHookApproval(ctx, req.ToolCallID)
+			}
+		}
+
+		outcome, err := p.approve(ctx, req)
+		if outcome == tools.ApprovalRejected {
+			p.emitPermissionDenied(ctx, req, "")
+		}
+		return outcome, err
+	}
 }
 
 // approve is the pipeline's approval stage. It maps the permission service's
@@ -300,7 +365,7 @@ func runToolBody(ctx context.Context, inner fantasy.AgentTool, call fantasy.Tool
 // finalize guarantees one structurally complete result. Hook-provided context
 // is appended after normalization so a hook cannot turn an error into a
 // success or hide the failure.
-func (p *toolPipeline) finalize(ctx context.Context, response fantasy.ToolResponse, outcome string) fantasy.ToolResponse {
+func (p *toolPipeline) finalize(ctx context.Context, call fantasy.ToolCall, response fantasy.ToolResponse, outcome string) fantasy.ToolResponse {
 	if hookResult, ok := ctx.Value(hookResultKey{}).(hooks.AggregateResult); ok {
 		if hookResult.Context != "" {
 			if response.Content != "" {
@@ -315,7 +380,93 @@ func (p *toolPipeline) finalize(ctx context.Context, response fantasy.ToolRespon
 	if outcome == "completed" && response.Content == "" && len(response.Data) == 0 {
 		response.Content = "Tool completed without output"
 	}
+	// The harness owns the result ceiling, not the individual tools: a tool
+	// that forgets to bound its output still cannot flood the context.
+	if truncated, didTruncate := tools.TruncateResult(call.Name, response); didTruncate {
+		response = truncated
+		spec, _ := tools.SpecFor(call.Name)
+		if updated, err := sjson.Set(response.Metadata, "result_truncated", true); err == nil {
+			response.Metadata = updated
+		}
+		if updated, err := sjson.Set(response.Metadata, "result_limit_chars", spec.ResultLimit()); err == nil {
+			response.Metadata = updated
+		}
+	}
 	return response
+}
+
+// attachPermissionStage records who decided the call, so a denial can be
+// explained in the UI, the log and the tool result itself.
+func (p *toolPipeline) attachPermissionStage(ctx context.Context, call fantasy.ToolCall, response fantasy.ToolResponse) fantasy.ToolResponse {
+	modeService, ok := p.permissions.(permission.ModeService)
+	if !ok {
+		return response
+	}
+	decision, ok := modeService.DecisionFor(call.ID)
+	if !ok {
+		return response
+	}
+	if updated, err := sjson.Set(response.Metadata, "permission_stage", string(decision.Stage)); err == nil {
+		response.Metadata = updated
+	}
+	if decision.Reason != "" {
+		if updated, err := sjson.Set(response.Metadata, "permission_reason", decision.Reason); err == nil {
+			response.Metadata = updated
+		}
+	}
+	return response
+}
+
+// emitToolOutcome runs the post-tool hooks and folds their context into the
+// result. Post hooks are observational: they cannot turn a failure into a
+// success, so the content is only appended to what the tool returned.
+func (p *toolPipeline) emitToolOutcome(ctx context.Context, call fantasy.ToolCall, response fantasy.ToolResponse, outcome string) fantasy.ToolResponse {
+	if p.runner == nil {
+		return response
+	}
+	event := hooks.EventPostToolUse
+	if outcome != "completed" {
+		event = hooks.EventPostToolUseFailure
+	}
+	if !p.runner.HasEvent(event) {
+		return response
+	}
+	result, err := p.runner.Run(ctx, event, tools.GetSessionFromContext(ctx), call.Name, call.Input)
+	if err != nil {
+		slog.Warn("Post-tool hook failed", "event", event, "tool", call.Name, "error", err)
+		return response
+	}
+	if result.Context != "" {
+		if response.Content != "" {
+			response.Content += "\n"
+		}
+		response.Content += result.Context
+	}
+	if result.HookCount > 0 {
+		response.Metadata = mergeHookMetadata(response.Metadata, result)
+	}
+	return response
+}
+
+// emitPermissionDenied notifies observers that a call was refused. It never
+// changes the outcome, so a hook cannot veto a veto.
+func (p *toolPipeline) emitPermissionDenied(ctx context.Context, req permission.CreatePermissionRequest, reason string) {
+	if p.runner == nil || !p.runner.HasEvent(hooks.EventPermissionDenied) {
+		return
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return
+	}
+	input := string(payload)
+	if reason != "" {
+		if updated, err := sjson.Set(input, "reason", reason); err == nil {
+			input = updated
+		}
+	}
+	if _, err := p.runner.Run(ctx, hooks.EventPermissionDenied, req.SessionID, req.ToolName, input); err != nil {
+		slog.Warn("PermissionDenied hook failed", "tool", req.ToolName, "error", err)
+	}
 }
 
 func (p *toolPipeline) recordResult(ctx context.Context, call fantasy.ToolCall, response fantasy.ToolResponse, outcome string) {

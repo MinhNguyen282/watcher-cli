@@ -10,10 +10,87 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// Hook event name constants.
+// Hook event name constants. Events are grouped by what can act on their
+// output: gating events can allow/deny, observational events can only add
+// context.
 const (
+	// Gating events.
+
+	// EventPreToolUse runs before a tool call and may allow, deny or
+	// rewrite its input.
 	EventPreToolUse = "PreToolUse"
+	// EventPermissionRequest runs when a call would prompt the user.
+	EventPermissionRequest = "PermissionRequest"
+	// EventUserPromptSubmit runs before a prompt is sent to the model.
+	EventUserPromptSubmit = "UserPromptSubmit"
+	// EventPreCompact runs before compaction and may veto it.
+	EventPreCompact = "PreCompact"
+
+	// Observational events.
+
+	// EventPostToolUse runs after a tool call completes successfully.
+	EventPostToolUse = "PostToolUse"
+	// EventPostToolUseFailure runs after a tool call fails.
+	EventPostToolUseFailure = "PostToolUseFailure"
+	// EventPermissionDenied runs after a call is denied.
+	EventPermissionDenied = "PermissionDenied"
+	// EventPostCompact runs after compaction completes.
+	EventPostCompact = "PostCompact"
+	// EventStop runs when a turn ends.
+	EventStop = "Stop"
+	// EventSessionStart runs when a session starts its first turn.
+	EventSessionStart = "SessionStart"
+	// EventSubagentStart runs when a sub-agent is launched.
+	EventSubagentStart = "SubagentStart"
+	// EventSubagentStop runs when a sub-agent finishes.
+	EventSubagentStop = "SubagentStop"
+	// EventFileChanged runs when a tracked file changes outside the agent.
+	EventFileChanged = "FileChanged"
+	// EventCwdChanged runs when the working directory changes.
+	EventCwdChanged = "CwdChanged"
+	// EventInstructionsLoaded runs when context files are loaded.
+	EventInstructionsLoaded = "InstructionsLoaded"
+	// EventTaskCreated and EventTaskCompleted bracket a task-list item.
+	EventTaskCreated   = "TaskCreated"
+	EventTaskCompleted = "TaskCompleted"
+	// EventNotification is emitted when the user is notified.
+	EventNotification = "Notification"
+	// EventMessageDisplay observes a message before it is displayed.
+	EventMessageDisplay = "MessageDisplay"
 )
+
+// Events is every event this build runs hooks for, in a stable order.
+var Events = []string{
+	EventPreToolUse,
+	EventPostToolUse,
+	EventPostToolUseFailure,
+	EventPermissionRequest,
+	EventPermissionDenied,
+	EventUserPromptSubmit,
+	EventSessionStart,
+	EventStop,
+	EventSubagentStart,
+	EventSubagentStop,
+	EventPreCompact,
+	EventPostCompact,
+	EventFileChanged,
+	EventCwdChanged,
+	EventInstructionsLoaded,
+	EventTaskCreated,
+	EventTaskCompleted,
+	EventNotification,
+	EventMessageDisplay,
+}
+
+// IsEvent reports whether name is a known hook event.
+func IsEvent(name string) bool {
+	for _, event := range Events {
+		if event == name {
+			return true
+		}
+	}
+	return false
+}
 
 // HaltExitCode is the exit code that halts the whole turn. 2 blocks the
 // current tool call; 49 sits in the no-man's-land between the

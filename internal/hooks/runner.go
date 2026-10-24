@@ -32,11 +32,13 @@ type compiledHook struct {
 	matcher *regexp.Regexp
 }
 
-// Runner executes hook commands and aggregates their results.
+// Runner executes hook commands and aggregates their results. Hooks are
+// kept per event so one runner serves every lifecycle event a session
+// fires.
 type Runner struct {
-	hooks      []compiledHook
-	cwd        string
-	projectDir string
+	hooksByEvent map[string][]compiledHook
+	cwd          string
+	projectDir   string
 }
 
 // NewRunner creates a Runner from the given hook configs. Each hook's
@@ -47,29 +49,43 @@ type Runner struct {
 // Hooks whose matcher fails to compile are skipped with a warning rather
 // than treated as match-everything. ValidateHooks is expected to have
 // caught syntax errors earlier, so this is defense in depth.
+// NewRunner builds a PreToolUse-only runner. It is the compatibility
+// constructor for callers that only care about tool gating; NewRunnerForEvents
+// covers the rest of the lifecycle.
 func NewRunner(hooks []config.HookConfig, cwd, projectDir string) *Runner {
-	compiled := make([]compiledHook, 0, len(hooks))
-	for _, h := range hooks {
-		ch := compiledHook{cfg: h}
-		if h.Matcher != "" {
-			re, err := regexp.Compile(h.Matcher)
-			if err != nil {
-				slog.Warn(
-					"Hook matcher failed to compile; skipping hook",
-					"matcher", h.Matcher,
-					"command", h.Command,
-					"error", err,
-				)
-				continue
+	if len(hooks) == 0 {
+		return NewRunnerForEvents(nil, cwd, projectDir)
+	}
+	return NewRunnerForEvents(map[string][]config.HookConfig{EventPreToolUse: hooks}, cwd, projectDir)
+}
+
+// NewRunnerForEvents builds a runner from every configured event.
+func NewRunnerForEvents(hooksByEvent map[string][]config.HookConfig, cwd, projectDir string) *Runner {
+	compiled := make(map[string][]compiledHook, len(hooksByEvent))
+	for event, hooks := range hooksByEvent {
+		for _, h := range hooks {
+			ch := compiledHook{cfg: h}
+			if h.Matcher != "" {
+				re, err := regexp.Compile(h.Matcher)
+				if err != nil {
+					slog.Warn(
+						"Hook matcher failed to compile; skipping hook",
+						"event", event,
+						"matcher", h.Matcher,
+						"command", h.Command,
+						"error", err,
+					)
+					continue
+				}
+				ch.matcher = re
 			}
-			ch.matcher = re
+			compiled[event] = append(compiled[event], ch)
 		}
-		compiled = append(compiled, ch)
 	}
 	return &Runner{
-		hooks:      compiled,
-		cwd:        cwd,
-		projectDir: projectDir,
+		hooksByEvent: compiled,
+		cwd:          cwd,
+		projectDir:   projectDir,
 	}
 }
 
@@ -78,17 +94,24 @@ func NewRunner(hooks []config.HookConfig, cwd, projectDir string) *Runner {
 // omitted. Intended for diagnostics; callers should not rely on ordering
 // or identity beyond that.
 func (r *Runner) Hooks() []config.HookConfig {
-	out := make([]config.HookConfig, len(r.hooks))
-	for i, h := range r.hooks {
-		out[i] = h.cfg
+	var out []config.HookConfig
+	for _, event := range Events {
+		for _, h := range r.hooksByEvent[event] {
+			out = append(out, h.cfg)
+		}
 	}
 	return out
+}
+
+// HasEvent reports whether any hook is configured for the event.
+func (r *Runner) HasEvent(event string) bool {
+	return r != nil && len(r.hooksByEvent[event]) > 0
 }
 
 // Run executes all matching hooks for the given event and tool, returning
 // an aggregated result.
 func (r *Runner) Run(ctx context.Context, eventName, sessionID, toolName, toolInputJSON string) (AggregateResult, error) {
-	matching := r.matchingHooks(toolName)
+	matching := r.matchingHooks(eventName, toolName)
 	if len(matching) == 0 {
 		return AggregateResult{Decision: DecisionNone}, nil
 	}
@@ -141,11 +164,14 @@ func (r *Runner) Run(ctx context.Context, eventName, sessionID, toolName, toolIn
 	return agg, nil
 }
 
-// matchingHooks returns hooks whose matcher matches the tool name (or has
-// no matcher, which matches everything).
-func (r *Runner) matchingHooks(toolName string) []config.HookConfig {
-	var matched []config.HookConfig
-	for _, h := range r.hooks {
+// matchingHooks returns the hooks registered for the event whose matcher
+// matches the tool name (or has no matcher, which matches everything). For
+// events without a tool, the matcher is tested against an empty name, so a
+// matcher-bearing hook does not fire for them.
+func (r *Runner) matchingHooks(eventName, toolName string) []config.HookConfig {
+	registered := r.hooksByEvent[eventName]
+	matched := make([]config.HookConfig, 0, len(registered))
+	for _, h := range registered {
 		if h.matcher == nil || h.matcher.MatchString(toolName) {
 			matched = append(matched, h.cfg)
 		}

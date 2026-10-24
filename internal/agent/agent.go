@@ -40,6 +40,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
+	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
@@ -215,9 +216,14 @@ type sessionAgent struct {
 	isYolo               bool
 	notify               pubsub.Publisher[notify.Notification]
 	runComplete          pubsub.Publisher[notify.RunComplete]
+	hooks                *hooks.Runner
 
 	messageQueue   *csync.Map[string, []SessionAgentCall]
 	activeRequests *csync.Map[string, *activeCancel]
+	// envStates remembers what each session was told about its environment,
+	// so a mid-session change produces one replacement notice instead of a
+	// stale working directory.
+	envStates *csync.Map[string, envSnapshot]
 
 	// dispatchMu holds a per-session mutex that serializes the
 	// accepted -> (cancel-on-entry | queued | active) transition in
@@ -273,6 +279,8 @@ type SessionAgentOptions struct {
 	Tools                []fantasy.AgentTool
 	Notify               pubsub.Publisher[notify.Notification]
 	RunComplete          pubsub.Publisher[notify.RunComplete]
+	// Hooks runs lifecycle hook events. Nil disables hooks for this agent.
+	Hooks *hooks.Runner
 }
 
 func NewSessionAgent(
@@ -292,8 +300,10 @@ func NewSessionAgent(
 		isYolo:               opts.IsYolo,
 		notify:               opts.Notify,
 		runComplete:          opts.RunComplete,
+		hooks:                opts.Hooks,
 		messageQueue:         csync.NewMap[string, []SessionAgentCall](),
 		activeRequests:       csync.NewMap[string, *activeCancel](),
+		envStates:            csync.NewMap[string, envSnapshot](),
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
 		acceptedRuns:         csync.NewMap[string, int](),
 		cancelMark:           csync.NewMap[string, uint64](),
@@ -738,6 +748,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		if skipRunComplete {
 			return
 		}
+		a.emitStopHook(ctx, call, currentAssistant)
 		complete := notify.RunComplete{SessionID: call.SessionID, RunID: call.RunID}
 		if currentAssistant != nil {
 			complete.MessageID = currentAssistant.ID
@@ -819,6 +830,27 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	}
 	userMsgCreated = true
 
+	// UserPromptSubmit runs before the prompt reaches the model. A deny or
+	// halt blocks the turn; the user message is kept so the block is
+	// auditable instead of looking like the prompt vanished.
+	if reason, blocked := a.promptBlockedByHook(ctx, call); blocked {
+		blockedMessage, createErr := a.messages.Create(ctx, call.SessionID, message.CreateMessageParams{
+			Role:     message.Assistant,
+			Model:    largeModel.ModelCfg.Model,
+			Provider: largeModel.ModelCfg.Provider,
+			Parts:    []message.ContentPart{message.TextContent{Text: "Prompt blocked by hook: " + reason}},
+		})
+		if createErr != nil {
+			return nil, createErr
+		}
+		blockedMessage.AddFinish(message.FinishReasonError, "Prompt blocked by hook", reason)
+		if updateErr := a.messages.Update(ctx, blockedMessage); updateErr != nil {
+			return nil, updateErr
+		}
+		currentAssistant = &blockedMessage
+		return nil, nil
+	}
+
 	// Add the session to the context. The run context (genCtx) and its
 	// cancel func were already created and registered under the dispatch
 	// mutex above for both the accepted and in-process paths.
@@ -897,6 +929,19 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			prepared.Messages = dropEmptyToolMedia(prepared.Messages)
 			prepared.Messages = a.workaroundProviderMediaLimitations(prepared.Messages, largeModel)
 
+			// Microcompaction is the cheap half of compaction: prune old
+			// tool output once the window is nearly full, before the turn
+			// that would otherwise trigger a full summary.
+			if budget := newContextBudget(int64(largeModel.CatwalkCfg.ContextWindow), a.contextOptions); budget.window > 0 {
+				if budget.shouldCompact(currentSession.PromptTokens) {
+					var pruned int
+					prepared.Messages, pruned = microcompactMessages(prepared.Messages, microcompactKeepRecent)
+					if pruned > 0 {
+						slog.Info("Microcompacted tool output", "session_id", call.SessionID, "results_pruned", pruned)
+					}
+				}
+			}
+
 			lastSystemRoleInx := 0
 			systemMessageUpdated := false
 			for i, msg := range prepared.Messages {
@@ -913,8 +958,19 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				}
 			}
 
+			// System-level context goes before the conversation. The
+			// environment update is prepended first so the stable prefix
+			// message stays immediately after it, keeping the cacheable
+			// prefix contiguous.
+			var prefixMessages []fantasy.Message
+			if update, changed := a.environmentUpdate(call.SessionID); changed {
+				prefixMessages = append(prefixMessages, fantasy.NewSystemMessage(update))
+			}
 			if promptPrefix != "" {
-				prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(promptPrefix)}, prepared.Messages...)
+				prefixMessages = append(prefixMessages, fantasy.NewSystemMessage(promptPrefix))
+			}
+			if len(prefixMessages) > 0 {
+				prepared.Messages = append(prefixMessages, prepared.Messages...)
 			}
 
 			sessionLock.Lock()
@@ -1385,6 +1441,12 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		return nil
 	}
 
+	// PreCompact can veto compaction: a user who wants the full history kept
+	// should not have it replaced because a window filled up.
+	if blocked, reason := a.preCompactBlocked(ctx, sessionID); blocked {
+		return fmt.Errorf("compaction blocked by hook: %s", reason)
+	}
+
 	aiMsgs, _ := a.preparePrompt(msgs, largeModel.CatwalkCfg.SupportsImages)
 
 	genCtx, cancel := context.WithCancel(ctx)
@@ -1508,6 +1570,30 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 
 	a.updateSessionUsage(largeModel, &currentSession, resp.TotalUsage, openrouterCost, false)
 
+	// Carry the working set across the boundary: the summary names what was
+	// decided, and this hidden message restores the files the conversation
+	// actually read so the next window does not start blind. Failure here is
+	// logged, not fatal: a summary without a working set still beats losing
+	// the history.
+	if workingSet := buildWorkingSetMessage(msgs, a.workingDir(), ""); workingSet != "" {
+		workingSetMessage, createErr := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
+			Role: message.User,
+			Parts: []message.ContentPart{
+				message.TextContent{Text: workingSet, Hidden: true},
+			},
+		})
+		if createErr != nil {
+			slog.Warn("Failed to persist post-compaction working set", "session_id", sessionID, "error", createErr)
+		} else {
+			slog.Info(
+				"Restored working set after compaction",
+				"session_id", sessionID,
+				"message_id", workingSetMessage.ID,
+				"files", len(recentlyViewedFiles(msgs, recentlyViewedFileLimit)),
+			)
+		}
+	}
+
 	// Just in case, get just the last usage info.
 	usage := resp.Response.Usage
 	currentSession.SummaryMessageID = summaryMessage.ID
@@ -1518,6 +1604,8 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	if err != nil {
 		return err
 	}
+
+	a.emitPostCompact(ctx, sessionID, summaryMessage.ID)
 
 	// Release the active request before processing queued messages so that
 	// Run() does not see the session as busy.

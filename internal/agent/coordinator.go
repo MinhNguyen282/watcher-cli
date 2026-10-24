@@ -161,6 +161,14 @@ type coordinator struct {
 	shadow      shadowgit.Service
 	repoMap     *repomap.Service
 	interactive bool
+	// hookRunner serves every configured lifecycle event. It is built once
+	// so the tool pipeline and the session agents share one instance.
+	hookRunner *hooks.Runner
+
+	// planModeState remembers the mode to restore when a plan is approved.
+	// It is created once per coordinator because both plan tools share it.
+	planModeOnce  sync.Once
+	planModeState *tools.PlanModeState
 
 	// agentMu guards mainAgent and mainAgentName: SetMainAgent runs on
 	// HTTP handler goroutines while runs, cancels, and probes read the
@@ -251,6 +259,14 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 	c.shadow = shadow
 
 	c.repoMap = repomap.New(opts.Config.WorkingDir())
+
+	if configuredHooks := opts.Config.Config().Hooks; len(configuredHooks) > 0 {
+		c.hookRunner = hooks.NewRunnerForEvents(
+			configuredHooks,
+			opts.Config.WorkingDir(),
+			opts.Config.WorkingDir(),
+		)
+	}
 
 	agentCfg, ok := opts.Config.Config().Agents[config.AgentCoder]
 	if !ok {
@@ -865,6 +881,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		Tools:                nil,
 		Notify:               c.notify,
 		RunComplete:          c.runComplete,
+		Hooks:                c.hookRunner,
 	})
 
 	// The readiness goroutines below perform one-time setup — building the
@@ -934,11 +951,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 
 	logFile := filepath.Join(c.cfg.Config().Options.DataDirectory, "logs", "crush.log")
 
-	// Build hook runner if PreToolUse hooks are configured.
-	var hookRunner *hooks.Runner
-	if preToolHooks := c.cfg.Config().Hooks[hooks.EventPreToolUse]; len(preToolHooks) > 0 {
-		hookRunner = hooks.NewRunner(preToolHooks, c.cfg.WorkingDir(), c.cfg.WorkingDir())
-	}
+	hookRunner := c.hookRunner
 
 	allTools = append(
 		allTools,
@@ -961,9 +974,20 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 	)
 
-	// Question tool is interactive-only and not available to sub-agents.
+	// Question and plan-mode tools are interactive-only: a sub-agent must
+	// not be able to change the session's permission posture.
 	if !isSubAgent && c.interactive {
 		allTools = append(allTools, tools.NewQuestionTool(c.questions))
+	}
+	if !isSubAgent {
+		if _, ok := c.permissions.(permission.ModeService); ok {
+			c.planModeOnce.Do(func() { c.planModeState = tools.NewPlanModeState() })
+			allTools = append(
+				allTools,
+				tools.NewEnterPlanModeTool(c.permissions, c.planModeState),
+				tools.NewExitPlanModeTool(c.permissions, c.planModeState),
+			)
+		}
 	}
 
 	// Add LSP tools if user has configured LSPs or auto_lsp is enabled (nil or true).
@@ -1742,6 +1766,8 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 		return fantasy.ToolResponse{}, errModelProviderNotConfigured
 	}
 
+	c.emitSubagentHook(ctx, hooks.EventSubagentStart, session.ID, params, nil)
+
 	// Run the agent
 	run := func() (*fantasy.AgentResult, error) {
 		subOpts := getProviderOptions(model, providerCfg)
@@ -1778,10 +1804,37 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 	}
 
 	output := subAgentOutput(result)
+	c.emitSubagentHook(ctx, hooks.EventSubagentStop, session.ID, params, err)
 	if output == "" {
 		return fantasy.NewTextErrorResponse("Sub-agent completed but produced no text output."), nil
 	}
 	return fantasy.NewTextResponse(output), nil
+}
+
+// emitSubagentHook announces a sub-agent lifecycle event. It is
+// observational: a broken hook cannot fail a delegation.
+func (c *coordinator) emitSubagentHook(ctx context.Context, event, childSessionID string, params subAgentParams, runErr error) {
+	if c.hookRunner == nil || !c.hookRunner.HasEvent(event) {
+		return
+	}
+	payload := map[string]string{
+		"parent_session_id": params.SessionID,
+		"session_id":        childSessionID,
+		"tool_call_id":      params.ToolCallID,
+		"prompt":            params.Prompt,
+	}
+	if runErr != nil {
+		payload["error"] = runErr.Error()
+	}
+	input, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	hookCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hookGrace)
+	defer cancel()
+	if _, err := c.hookRunner.Run(hookCtx, event, childSessionID, "", string(input)); err != nil {
+		slog.Warn("Sub-agent hook failed", "event", event, "error", err)
+	}
 }
 
 func subAgentOutput(result *fantasy.AgentResult) string {

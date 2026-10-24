@@ -434,6 +434,17 @@ const (
 
 type Permissions struct {
 	AllowedTools []string `json:"allowed_tools,omitempty" jsonschema:"description=List of tools that don't require permission prompts,example=bash,example=view"`
+	// Mode is the session permission posture. It is parsed by the
+	// permission package; an unknown value fails config validation.
+	Mode string `json:"mode,omitempty" jsonschema:"description=Permission mode: default asks for everything not covered by a rule, plan is read-only, acceptEdits auto-approves file edits, auto auto-approves read-only work, dontAsk refuses anything that would prompt, bypassPermissions approves everything,enum=default,enum=plan,enum=acceptEdits,enum=auto,enum=dontAsk,enum=bypassPermissions,default=default"`
+	// Allow, Deny and Ask are tool-scoped rules in "tool" or
+	// "tool(content)" form, for example "bash(git status:*)".
+	Allow []string `json:"allow,omitempty" jsonschema:"description=Rules that approve a call without prompting,example=bash(git status:*)"`
+	Deny  []string `json:"deny,omitempty" jsonschema:"description=Rules that refuse a call without prompting,example=bash(rm -rf:*)"`
+	Ask   []string `json:"ask,omitempty" jsonschema:"description=Rules that force a prompt even when a broader allow rule matches,example=bash(git push:*)"`
+	// DisableBypassPermissions removes bypassPermissions from the modes
+	// this deployment allows.
+	DisableBypassPermissions bool `json:"disable_bypass_permissions,omitempty" jsonschema:"description=Refuse bypassPermissions mode even when requested,default=false"`
 }
 
 type TrailerStyle string

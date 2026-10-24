@@ -100,6 +100,35 @@ type App struct {
 // per-workspace skill discovery results computed by the caller; the
 // caller is responsible for constructing it (typically via
 // skills.NewManager + skills.DiscoverFromConfig).
+// applyPermissionPolicy compiles the configured permission mode and rules
+// into the service. An invalid mode or rule is a startup error: silently
+// falling back would change what the agent is allowed to do.
+func applyPermissionPolicy(service permission.Service, cfg *config.Permissions) error {
+	modeService, ok := service.(permission.ModeService)
+	if !ok {
+		return nil
+	}
+	if cfg == nil {
+		modeService.SetMode(permission.ModeDefault)
+		modeService.SetModeOptions(permission.ModeOptions{BypassAllowed: true})
+		return nil
+	}
+	mode, err := permission.ParseMode(cfg.Mode)
+	if err != nil {
+		return err
+	}
+	rules, err := permission.CompileRules(cfg.Allow, cfg.Deny, cfg.Ask)
+	if err != nil {
+		return fmt.Errorf("invalid permission rule: %w", err)
+	}
+	modeService.SetMode(mode)
+	modeService.SetModeOptions(permission.ModeOptions{
+		BypassAllowed: !cfg.DisableBypassPermissions,
+	})
+	modeService.SetRules(rules)
+	return nil
+}
+
 func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr *skills.Manager) (*App, error) {
 	q := db.New(conn)
 	sessions := session.NewService(q, conn)
@@ -112,11 +141,16 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 		allowedTools = cfg.Permissions.AllowedTools
 	}
 
+	permissions := permission.NewPermissionService(store.WorkingDir(), skipPermissionsRequests, allowedTools)
+	if err := applyPermissionPolicy(permissions, cfg.Permissions); err != nil {
+		return nil, err
+	}
+
 	app := &App{
 		Sessions:    sessions,
 		Messages:    messages,
 		History:     files,
-		Permissions: permission.NewPermissionService(store.WorkingDir(), skipPermissionsRequests, allowedTools),
+		Permissions: permissions,
 		Questions:   question.NewService(),
 		FileTracker: filetracker.NewService(q, conn),
 		LSPManager:  lsp.NewManager(store),

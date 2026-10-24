@@ -43,6 +43,16 @@ type CreatePermissionRequest struct {
 	Action      string `json:"action"`
 	Params      any    `json:"params"`
 	Path        string `json:"path"`
+	// RuleContent is the call's content for rule matching: the file path,
+	// shell command, URL or query selected by the tool spec. The dispatch
+	// pipeline fills it so every tool gets content-scoped rules without
+	// repeating the extraction.
+	RuleContent string `json:"rule_content,omitempty"`
+	// Mutating reports whether the tool can change state. Plan mode uses it
+	// to refuse the call before any prompt is shown.
+	Mutating bool `json:"mutating,omitempty"`
+	// ReadOnly reports whether the tool is classified read-only.
+	ReadOnly bool `json:"read_only,omitempty"`
 }
 
 type PermissionNotification struct {
@@ -50,6 +60,10 @@ type PermissionNotification struct {
 	ToolCallID string `json:"tool_call_id"`
 	Granted    bool   `json:"granted"`
 	Denied     bool   `json:"denied"`
+	// Stage and Reason describe which stage decided, when a decision has
+	// already been made. They stay empty for the initial "requested" event.
+	Stage  Stage  `json:"stage,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type PermissionRequest struct {
@@ -61,6 +75,8 @@ type PermissionRequest struct {
 	Action      string `json:"action"`
 	Params      any    `json:"params"`
 	Path        string `json:"path"`
+	// RuleContent is what a persisted rule would be scoped to.
+	RuleContent string `json:"rule_content,omitempty"`
 }
 
 type Service interface {
@@ -110,6 +126,12 @@ type permissionService struct {
 	skip                  atomic.Bool
 	allowedTools          []string
 
+	mode        Mode
+	modeOptions ModeOptions
+	rules       []Rule
+	policyMu    sync.RWMutex
+	decisions   *csync.Map[string, Decision]
+
 	// used to make sure we only process one request at a time
 	requestMu       sync.Mutex
 	activeRequest   *PermissionRequest
@@ -147,6 +169,7 @@ func (s *permissionService) resolve(permission PermissionRequest, granted, denie
 		ToolCallID: permission.ToolCallID,
 		Granted:    granted,
 		Denied:     denied,
+		Stage:      StageUser,
 	})
 
 	// respCh is buffered (cap 1) and only ever has at most one sender
@@ -186,33 +209,35 @@ func (s *permissionService) Deny(permission PermissionRequest) bool {
 }
 
 func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRequest) (bool, error) {
-	if s.skip.Load() {
-		return true, nil
+	decision := s.Decide(ctx, opts)
+	if opts.ToolCallID != "" {
+		s.decisions.Set(opts.ToolCallID, decision)
 	}
-
-	// Check if the tool/action combination is in the allowlist
-	commandKey := opts.ToolName + ":" + opts.Action
-	if slices.Contains(s.allowedTools, commandKey) || slices.Contains(s.allowedTools, opts.ToolName) {
-		return true, nil
-	}
-
-	// A PreToolUse hook that returned decision=allow stamps the context
-	// with the tool call ID. Treat that as a pre-approval and skip the
-	// prompt entirely. We still publish a granted notification so the UI
-	// and audit subscribers see the outcome.
-	if hookApproved(ctx, opts.ToolCallID) {
+	if decision.Allowed() {
 		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
 			SessionID:  opts.SessionID,
 			ToolCallID: opts.ToolCallID,
 			Granted:    true,
+			Stage:      decision.Stage,
+			Reason:     decision.Reason,
 		})
 		return true, nil
+	}
+	if decision.Denied() {
+		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+			SessionID:  opts.SessionID,
+			ToolCallID: opts.ToolCallID,
+			Denied:     true,
+			Stage:      decision.Stage,
+			Reason:     decision.Reason,
+		})
+		return false, nil
 	}
 
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 
-	// tell the UI that a permission was requested
+	// Tell the UI that a permission was requested.
 	s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
 		SessionID:  opts.SessionID,
 		ToolCallID: opts.ToolCallID,
@@ -231,42 +256,16 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 		return true, nil
 	}
 
-	fileInfo, err := os.Stat(opts.Path)
-	dir := opts.Path
-	if err == nil {
-		if fileInfo.IsDir() {
-			dir = opts.Path
-		} else {
-			dir = filepath.Dir(opts.Path)
-		}
-	}
-
-	if dir == "." {
-		dir = s.workingDir
-	}
 	permission := PermissionRequest{
 		ID:          uuid.New().String(),
-		Path:        dir,
+		Path:        s.permissionPath(opts),
 		SessionID:   opts.SessionID,
 		ToolCallID:  opts.ToolCallID,
 		ToolName:    opts.ToolName,
 		Description: opts.Description,
 		Action:      opts.Action,
 		Params:      opts.Params,
-	}
-
-	if _, ok := s.sessionPermissions.Get(PermissionKey{
-		SessionID: permission.SessionID,
-		ToolName:  permission.ToolName,
-		Action:    permission.Action,
-		Path:      permission.Path,
-	}); ok {
-		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
-			SessionID:  opts.SessionID,
-			ToolCallID: opts.ToolCallID,
-			Granted:    true,
-		})
-		return true, nil
+		RuleContent: opts.RuleContent,
 	}
 
 	s.activeRequestMu.Lock()
@@ -277,7 +276,7 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	s.pendingRequests.Set(permission.ID, respCh)
 	defer s.pendingRequests.Del(permission.ID)
 
-	// Publish the request
+	// Publish the request.
 	s.Publish(pubsub.CreatedEvent, permission)
 
 	select {
@@ -286,6 +285,147 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	case granted := <-respCh:
 		return granted, nil
 	}
+}
+
+// Decide runs the non-interactive half of a permission check: modes, rules,
+// the allowlist, hook approvals, session grants and bypass. It never blocks.
+// A Prompt decision means the caller must ask the user.
+func (s *permissionService) Decide(ctx context.Context, opts CreatePermissionRequest) Decision {
+	if s.skip.Load() {
+		return Decision{Granted: true, Stage: StageSkip, Reason: "permission prompts are disabled"}
+	}
+
+	mode := s.Mode()
+	rules := s.Rules()
+	tool, content := opts.ToolName, s.ruleContent(opts)
+
+	if rule, ok := EvaluateRules(rules, tool, content, BehaviorDeny); ok {
+		return Decision{Stage: StageRuleDeny, Reason: "denied by rule: " + rule.String(), Rule: rule}
+	}
+	if rule, ok := EvaluateRules(rules, tool, content, BehaviorAsk); ok {
+		return Decision{Prompt: true, Stage: StageRuleAsk, Reason: "rule requires confirmation: " + rule.String(), Rule: rule}
+	}
+	if rule, ok := EvaluateRules(rules, tool, content, BehaviorAllow); ok {
+		return Decision{Granted: true, Stage: StageRuleAllow, Reason: "allowed by rule: " + rule.String(), Rule: rule}
+	}
+
+	commandKey := tool + ":" + opts.Action
+	if slices.Contains(s.allowedTools, commandKey) || slices.Contains(s.allowedTools, tool) {
+		return Decision{Granted: true, Stage: StageAllowlist, Reason: "tool is in the allowed tools list"}
+	}
+
+	if hookApproved(ctx, opts.ToolCallID) {
+		return Decision{Granted: true, Stage: StageHook, Reason: "approved by PreToolUse hook"}
+	}
+
+	if mode == ModePlan && opts.Mutating {
+		return Decision{Stage: StageModePlan, Reason: "plan mode is read-only"}
+	}
+
+	if mode == ModeBypassPermissions {
+		return Decision{Granted: true, Stage: StageModeBypass, Reason: "bypass permissions mode"}
+	}
+
+	if mode.CanAutoApprove(true) {
+		if !opts.Mutating {
+			return Decision{Granted: true, Stage: StageModeAuto, Reason: "read-only tool in " + string(mode) + " mode"}
+		}
+		if tool == "bash" && IsReadOnlyCommand(content) {
+			return Decision{Granted: true, Stage: StageAllowlist, Reason: "read-only command in " + string(mode) + " mode"}
+		}
+	}
+
+	if _, ok := s.sessionPermissions.Get(PermissionKey{
+		SessionID: opts.SessionID,
+		ToolName:  opts.ToolName,
+		Action:    opts.Action,
+		Path:      s.permissionPath(opts),
+	}); ok {
+		return Decision{Granted: true, Stage: StageSession, Reason: "approved earlier in this session"}
+	}
+
+	if mode == ModeDontAsk {
+		return Decision{Stage: StageModeDontAsk, Reason: "dontAsk mode denies anything that would prompt"}
+	}
+
+	return Decision{Prompt: true, Stage: StageUser}
+}
+
+// ruleContent picks the content a rule is matched against, falling back to
+// the action and path for callers that do not extract a rule field.
+func (s *permissionService) ruleContent(opts CreatePermissionRequest) string {
+	if opts.RuleContent != "" {
+		return opts.RuleContent
+	}
+	if opts.ToolName == "bash" {
+		return opts.Action
+	}
+	if opts.Path != "" {
+		return opts.Path
+	}
+	return opts.Action
+}
+
+// permissionPath normalizes the directory a session grant is scoped to.
+func (s *permissionService) permissionPath(opts CreatePermissionRequest) string {
+	dir := opts.Path
+	if fileInfo, err := os.Stat(opts.Path); err == nil && !fileInfo.IsDir() {
+		dir = filepath.Dir(opts.Path)
+	}
+	if dir == "." || dir == "" {
+		dir = s.workingDir
+	}
+	return dir
+}
+
+func (s *permissionService) SetMode(mode Mode) {
+	s.policyMu.Lock()
+	s.mode = mode
+	s.policyMu.Unlock()
+}
+
+func (s *permissionService) Mode() Mode {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	if s.mode == "" {
+		return ModeDefault
+	}
+	return s.mode
+}
+
+func (s *permissionService) SetModeOptions(options ModeOptions) {
+	s.policyMu.Lock()
+	s.modeOptions = options
+	s.policyMu.Unlock()
+}
+
+func (s *permissionService) ModeOptions() ModeOptions {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return s.modeOptions
+}
+
+func (s *permissionService) SetRules(rules []Rule) {
+	copied := make([]Rule, len(rules))
+	copy(copied, rules)
+	s.policyMu.Lock()
+	s.rules = copied
+	s.policyMu.Unlock()
+}
+
+func (s *permissionService) Rules() []Rule {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	copied := make([]Rule, len(s.rules))
+	copy(copied, s.rules)
+	return copied
+}
+
+func (s *permissionService) DecisionFor(toolCallID string) (Decision, bool) {
+	if toolCallID == "" {
+		return Decision{}, false
+	}
+	return s.decisions.Get(toolCallID)
 }
 
 // ActiveRequest returns the request that is currently awaiting a
@@ -333,6 +473,8 @@ func NewPermissionService(workingDir string, skip bool, allowedTools []string) S
 		autoApproveSessions: make(map[string]bool),
 		allowedTools:        allowedTools,
 		pendingRequests:     csync.NewMap[string, chan bool](),
+		decisions:           csync.NewMap[string, Decision](),
+		modeOptions:         ModeOptions{BypassAllowed: true},
 	}
 	svc.skip.Store(skip)
 	return svc

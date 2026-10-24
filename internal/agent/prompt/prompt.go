@@ -20,13 +20,16 @@ import (
 	"github.com/charmbracelet/crush/internal/skills"
 )
 
-// Prompt represents a template-based prompt generator.
+// Prompt represents a template-based prompt generator. A prompt can carry a
+// second template for the dynamic tail (environment, skills, context files)
+// so the static prefix stays stable for provider caching.
 type Prompt struct {
-	name       string
-	template   string
-	now        func() time.Time
-	platform   string
-	workingDir string
+	name            string
+	template        string
+	dynamicTemplate string
+	now             func() time.Time
+	platform        string
+	workingDir      string
 }
 
 type PromptDat struct {
@@ -69,10 +72,18 @@ func WithWorkingDir(workingDir string) Option {
 }
 
 func NewPrompt(name, promptTemplate string, opts ...Option) (*Prompt, error) {
+	return NewPromptWithDynamic(name, promptTemplate, "", opts...)
+}
+
+// NewPromptWithDynamic builds a prompt from a static template and a dynamic
+// tail template. Both receive the same data; the dynamic template is
+// rendered as its own block after the environment record.
+func NewPromptWithDynamic(name, promptTemplate, dynamicTemplate string, opts ...Option) (*Prompt, error) {
 	p := &Prompt{
-		name:     name,
-		template: promptTemplate,
-		now:      time.Now,
+		name:            name,
+		template:        promptTemplate,
+		dynamicTemplate: dynamicTemplate,
+		now:             time.Now,
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -81,19 +92,51 @@ func NewPrompt(name, promptTemplate string, opts ...Option) (*Prompt, error) {
 }
 
 func (p *Prompt) Build(ctx context.Context, provider, model string, store *config.ConfigStore) (string, error) {
-	t, err := template.New(p.name).Parse(p.template)
+	set, err := p.BuildSet(ctx, provider, model, store)
+	if err != nil {
+		return "", err
+	}
+	return set.Render(), nil
+}
+
+// BuildSet renders the prompt as named blocks. The static instructions come
+// first so a provider cache can match the prefix; the environment record and
+// the context tail follow it.
+func (p *Prompt) BuildSet(ctx context.Context, provider, model string, store *config.ConfigStore) (Set, error) {
+	d, err := p.promptData(ctx, provider, model, store)
+	if err != nil {
+		return Set{}, err
+	}
+	static, err := p.render(p.name, p.template, d)
+	if err != nil {
+		return Set{}, err
+	}
+	blocks := []Block{
+		{Name: "instructions", Text: static, Scope: ScopeOrg},
+		EnvironmentBlock(d),
+	}
+	if p.dynamicTemplate != "" {
+		dynamic, err := p.render(p.name+"-dynamic", p.dynamicTemplate, d)
+		if err != nil {
+			return Set{}, err
+		}
+		blocks = append(blocks, Block{Name: "context", Text: dynamic, Dynamic: true, Scope: ScopeNone})
+	}
+	return Assemble(blocks...), nil
+}
+
+func (p *Prompt) render(name, text string, d PromptDat) (string, error) {
+	if strings.TrimSpace(text) == "" {
+		return "", nil
+	}
+	t, err := template.New(name).Parse(text)
 	if err != nil {
 		return "", fmt.Errorf("parsing template: %w", err)
 	}
 	var sb strings.Builder
-	d, err := p.promptData(ctx, provider, model, store)
-	if err != nil {
-		return "", err
-	}
 	if err := t.Execute(&sb, d); err != nil {
 		return "", fmt.Errorf("executing template: %w", err)
 	}
-
 	return sb.String(), nil
 }
 
@@ -213,7 +256,7 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 		WorkingDir:    filepath.ToSlash(workingDir),
 		IsGitRepo:     isGit,
 		Platform:      platform,
-		Date:          p.now().Format("1/2/2006"),
+		Date:          p.now().Format(DateFormat),
 		AvailSkillXML: availSkillXML,
 	}
 	if isGit {

@@ -11,6 +11,9 @@ import (
 //go:embed templates/coder.md.tpl
 var coderPromptTmpl []byte
 
+//go:embed templates/coder_dynamic.md.tpl
+var coderDynamicTmpl []byte
+
 //go:embed templates/task.md.tpl
 var taskPromptTmpl []byte
 
@@ -21,7 +24,12 @@ var planPromptTmpl []byte
 var initializePromptTmpl []byte
 
 func coderPrompt(opts ...prompt.Option) (*prompt.Prompt, error) {
-	systemPrompt, err := prompt.NewPrompt("coder", string(coderPromptTmpl), opts...)
+	systemPrompt, err := prompt.NewPromptWithDynamic(
+		"coder",
+		string(coderPromptTmpl),
+		string(coderDynamicTmpl),
+		opts...,
+	)
 	if err != nil {
 		return nil, err
 	}
