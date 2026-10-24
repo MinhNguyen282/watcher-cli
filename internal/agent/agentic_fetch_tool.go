@@ -111,12 +111,7 @@ func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (
 			}
 			defer os.RemoveAll(tmpDir)
 
-			// agentic_fetch needs the cheap model: resolve the small slot
-			// as the primary model of a synthetic agent config.
-			_, small, err := c.buildAgentModels(ctx, config.Agent{Model: config.SelectedModelTypeSmall}, true)
-			if err != nil {
-				return fantasy.ToolResponse{}, fmt.Errorf("error building models: %s", err)
-			}
+			small := c.smallOnlyModels().Small
 
 			smallProviderCfg, ok := c.cfg.Config().Providers.Get(small.ModelCfg.Provider)
 			if !ok {
@@ -217,8 +212,7 @@ func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (
 			// the user's hooks N times per delegated turn.
 
 			agent := NewSessionAgent(SessionAgentOptions{
-				LargeModel:           small, // Use small model for both (fetch doesn't need large)
-				SmallModel:           small,
+				Models:               c.smallOnlyModels,
 				SystemPromptPrefix:   smallProviderCfg.SystemPromptPrefix,
 				SystemPrompt:         systemPrompt,
 				DisableAutoSummarize: c.cfg.Config().Options.DisableAutoSummarize,

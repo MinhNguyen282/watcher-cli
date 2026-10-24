@@ -259,7 +259,7 @@ func (a *AssistantMessageItem) Spinning() bool {
 // restyleAnim implements [animRestyler].
 func (a *AssistantMessageItem) restyleAnim() {
 	a.anim.SetColors(
-		a.sty.WorkingLabelColor,
+		a.sty.ThinkingLabelColor,
 		a.sty.WorkingGradFromColor,
 		a.sty.WorkingGradToColor,
 		a.sty.WorkingTimerColor,
