@@ -755,14 +755,16 @@ provider add deepseek --type openai-compat \
   --base-url "https://api.deepseek.com/v1" \
   --api-key "$DEEPSEEK_API_KEY"
 
-model add deepseek/deepseek-chat \
-  --name "Deepseek V3" \
-  --context-window 64000 \
-  --default-max-tokens 5000 \
-  --price-input 0.27 \
-  --price-output 1.1 \
-  --price-cache-create 1.1 \
-  --price-cache-hit 0.07
+model add deepseek/deepseek-flash \
+  --name "DeepSeek V4.1 Flash" \
+  --context-window 1000000 \
+  --default-max-tokens 8192 \
+  --can-reason true \
+  --supports-images true
+
+model large deepseek/deepseek-flash
+model small deepseek/deepseek-flash
+model fast deepseek/deepseek-flash
 ```
 
 #### Anthropic-Compatible APIs

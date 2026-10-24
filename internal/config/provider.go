@@ -64,6 +64,7 @@ func UpdateProviders(pathOrURL string) error {
 		}
 	}
 
+	providers = normalizeDeepSeekCatalog(providers)
 	if err := newCache[[]catwalk.Provider](cachePathFor("providers")).Store(providers); err != nil {
 		return fmt.Errorf("failed to save providers to cache: %w", err)
 	}
@@ -234,6 +235,7 @@ func LoadProviders(ctx context.Context, cfg *Config, refreshHyper HyperTokenRefr
 		} else {
 			providerList = slices.Collect(providers.Seq())
 		}
+		providerList = normalizeDeepSeekCatalog(providerList)
 		providerErr = errors.Join(catwalkErr, hyperErr)
 	})
 	return providerList, providerErr

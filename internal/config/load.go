@@ -792,6 +792,7 @@ func resolveSelectedModels(cfg *Config, knownProviders []catwalk.Provider) (reso
 		if largeModelSelected.Provider != "" {
 			large.Provider = largeModelSelected.Provider
 		}
+		result.LargeFallback = canonicalizeDeepSeekSelection(cfg, &large)
 		model := cfg.GetModel(large.Provider, large.Model)
 		if model == nil {
 			large = defaultLarge
@@ -837,6 +838,7 @@ func resolveSelectedModels(cfg *Config, knownProviders []catwalk.Provider) (reso
 			small.Provider = smallModelSelected.Provider
 		}
 
+		result.SmallFallback = canonicalizeDeepSeekSelection(cfg, &small)
 		model := cfg.GetModel(small.Provider, small.Model)
 		if model == nil {
 			small = defaultSmall
@@ -904,6 +906,7 @@ func resolveSelectedModels(cfg *Config, knownProviders []catwalk.Provider) (reso
 		if fastModelSelected.Provider != "" {
 			fast.Provider = fastModelSelected.Provider
 		}
+		result.FastFallback = canonicalizeDeepSeekSelection(cfg, &fast)
 		model := cfg.GetModel(fast.Provider, fast.Model)
 		if model == nil {
 			fast = small
