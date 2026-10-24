@@ -27,9 +27,10 @@ func (t *AgentEventType) UnmarshalText(text []byte) error {
 
 // AgentEvent represents an event emitted by the agent.
 type AgentEvent struct {
-	Type    AgentEventType `json:"type"`
-	Message Message        `json:"message"`
-	Error   error          `json:"error,omitempty"`
+	RoutingSummary string         `json:"routing_summary,omitempty"`
+	Type           AgentEventType `json:"type"`
+	Message        Message        `json:"message"`
+	Error          error          `json:"error,omitempty"`
 
 	// RunID echoes the caller-supplied AgentMessage.RunID for the run
 	// that produced this event. It lets observers (notably

@@ -6026,6 +6026,11 @@ func (m *UI) openPlanHandoff() {
 func (m *UI) handleAgentNotification(n notify.Notification) tea.Cmd {
 	var cmds []tea.Cmd
 	switch n.Type {
+	case notify.TypeRoutingObservation:
+		if m.session != nil && n.SessionID == m.session.ID {
+			return util.CmdHandler(util.NewInfoMsg(n.RoutingSummary))
+		}
+		return nil
 	case notify.TypeAgentFinished:
 		cmds = append(cmds, m.sendNotification(notification.Notification{
 			Title:   "Crush is waiting...",

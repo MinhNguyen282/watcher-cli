@@ -460,6 +460,8 @@ func (Attribution) JSONSchemaExtend(schema *jsonschema.Schema) {
 }
 
 type Options struct {
+	JevObserve           bool        `json:"jev_observe,omitempty" jsonschema:"description=Observe Jev routing suggestions before each prompt without changing agent behavior,default=false"`
+	JevModel             string      `json:"jev_model,omitempty" jsonschema:"description=TypeSafe decision model used by the observer,default=jev-latest"`
 	ContextPaths         []string    `json:"context_paths,omitempty" jsonschema:"description=Paths to files containing context information for the AI,example=.cursorrules,example=CRUSH.md"`
 	GlobalContextPaths   []string    `json:"global_context_paths,omitempty" jsonschema:"description=Paths to files containing global context information for the AI,default=~/.config/crush/CRUSH.md,default=~/.config/AGENTS.md"`
 	SkillsPaths          []string    `json:"skills_paths,omitempty" jsonschema:"description=Paths to directories containing Agent Skills (folders with SKILL.md files),example=~/.config/crush/skills,example=./skills"`
@@ -838,6 +840,17 @@ func (h *HookConfig) DisplayName() string {
 	return h.Command
 }
 
+// DatabaseConfig describes one read-only database connection used by
+// the db_schema and db_query tools.
+type DatabaseConfig struct {
+	// Name identifies the database in tool calls.
+	Name string `json:"name" jsonschema:"required,description=Name used to refer to this database in tool calls"`
+	// Type is "postgres" or "mysql".
+	Type string `json:"type" jsonschema:"required,description=Database type,enum=postgres,enum=mysql"`
+	// URL is the driver connection string (values support $VAR expansion).
+	URL string `json:"url" jsonschema:"required,description=Connection URL for the database driver"`
+}
+
 // TimeoutDuration returns the hook timeout as a time.Duration, defaulting
 // to 30s.
 func (h *HookConfig) TimeoutDuration() time.Duration {
@@ -869,6 +882,10 @@ type Config struct {
 	Permissions *Permissions `json:"permissions,omitempty" jsonschema:"description=Permission settings for tool usage"`
 
 	Tools Tools `json:"tools,omitzero" jsonschema:"description=Tool configurations"`
+
+	// Databases lists read-only database connections for the db_schema
+	// and db_query tools.
+	Databases []DatabaseConfig `json:"databases,omitempty" jsonschema:"description=Read-only database connections for schema inspection"`
 
 	Hooks map[string][]HookConfig `json:"hooks,omitempty" jsonschema:"description=User-defined shell commands that fire on hook events (e.g. PreToolUse)"`
 
@@ -1045,6 +1062,8 @@ func allToolNames() []string {
 		"bash",
 		"crush_info",
 		"crush_logs",
+		"db_query",
+		"db_schema",
 		"job_output",
 		"job_kill",
 		"download",
@@ -1063,6 +1082,7 @@ func allToolNames() []string {
 		"glob",
 		"grep",
 		"ls",
+		"openapi_spec",
 		"question",
 		"repo_map",
 		"sourcegraph",
@@ -1083,7 +1103,7 @@ func resolveAllowedTools(allTools []string, disabledTools []string) []string {
 }
 
 func resolveReadOnlyTools(tools []string) []string {
-	readOnlyTools := []string{"glob", "grep", "ls", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "repo_map", "sourcegraph", "view"}
+	readOnlyTools := []string{"db_query", "db_schema", "openapi_spec", "glob", "grep", "ls", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "repo_map", "sourcegraph", "view"}
 	// filter to only include tools that are in allowedtools (include mode)
 	return filterSlice(tools, readOnlyTools, true)
 }
@@ -1093,6 +1113,9 @@ func resolvePlanTools(tools []string) []string {
 	// needs symbol navigation just as much as research does.
 	planTools := []string{
 		"agent",
+		"db_query",
+		"db_schema",
+		"openapi_spec",
 		"glob",
 		"grep",
 		"ls",

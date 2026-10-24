@@ -84,6 +84,9 @@ func Load(ctx context.Context, workingDir, dataDir string, debug bool) (*ConfigS
 	if err := cfg.ValidateHooks(); err != nil {
 		return nil, fmt.Errorf("invalid hook configuration: %w", err)
 	}
+	if err := cfg.ValidateDatabases(); err != nil {
+		return nil, fmt.Errorf("invalid database configuration: %w", err)
+	}
 
 	if !isInsideWorktree() {
 		const depth = 2

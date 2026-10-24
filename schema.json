@@ -90,6 +90,13 @@
           "$ref": "#/$defs/Tools",
           "description": "Tool configurations"
         },
+        "databases": {
+          "items": {
+            "$ref": "#/$defs/DatabaseConfig"
+          },
+          "type": "array",
+          "description": "Read-only database connections for schema inspection"
+        },
         "hooks": {
           "additionalProperties": {
             "items": {
@@ -110,6 +117,33 @@
       },
       "additionalProperties": false,
       "type": "object"
+    },
+    "DatabaseConfig": {
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name used to refer to this database in tool calls"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "postgres",
+            "mysql"
+          ],
+          "description": "Database type"
+        },
+        "url": {
+          "type": "string",
+          "description": "Connection URL for the database driver"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "type",
+        "url"
+      ]
     },
     "HookConfig": {
       "properties": {
@@ -510,6 +544,16 @@
     },
     "Options": {
       "properties": {
+        "jev_observe": {
+          "type": "boolean",
+          "description": "Observe Jev routing suggestions before each prompt without changing agent behavior",
+          "default": false
+        },
+        "jev_model": {
+          "type": "string",
+          "description": "TypeSafe decision model used by the observer",
+          "default": "jev-latest"
+        },
         "context_paths": {
           "items": {
             "type": "string",

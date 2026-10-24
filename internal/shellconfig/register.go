@@ -23,6 +23,7 @@ func init() {
 	shell.RegisterBuiltin("model", handleModel)
 	shell.RegisterBuiltin("mcp", handleMCP)
 	shell.RegisterBuiltin("lsp", handleLSP)
+	shell.RegisterBuiltin("db", handleDB)
 	shell.RegisterBuiltin("permissions", handlePermissions)
 	shell.RegisterBuiltin("hook", handleHook)
 	shell.RegisterBuiltin("option", handleOption)

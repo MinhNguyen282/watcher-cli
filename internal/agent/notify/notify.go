@@ -7,6 +7,8 @@ package notify
 type Type string
 
 const (
+	// TypeRoutingObservation carries an advisory pre-turn routing summary.
+	TypeRoutingObservation Type = "routing_observation"
 	// TypeAgentFinished indicates the agent has completed its turn.
 	TypeAgentFinished Type = "agent_finished"
 	// TypeReAuthenticate indicates the agent encountered an
@@ -29,10 +31,11 @@ const (
 
 // Notification represents a domain event published by the agent.
 type Notification struct {
-	SessionID    string
-	SessionTitle string
-	Type         Type
-	ProviderID   string
+	RoutingSummary string
+	SessionID      string
+	SessionTitle   string
+	Type           Type
+	ProviderID     string
 	// RunID, when non-empty, is the caller-supplied correlator
 	// (proto.AgentMessage.RunID) for the run that produced this
 	// notification. It lets observers attribute a TypeAgentError to a

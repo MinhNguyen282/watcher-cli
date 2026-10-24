@@ -367,6 +367,7 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 	}
 
 	model := agent.Model()
+	c.observeJev(ctx, sessionID, prompt, model.ModelCfg, agentName)
 	maxTokens := model.CatwalkCfg.DefaultMaxTokens
 	if model.ModelCfg.MaxTokens != 0 {
 		maxTokens = model.ModelCfg.MaxTokens
@@ -956,6 +957,20 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 			tools.NewReadMCPResourceTool(c.cfg, c.permissions),
 		)
 	}
+
+	// Schema-aware inspectors: read-only database access and OpenAPI
+	// spec summaries. The tools are always present; the guard and the
+	// permission flow keep them safe when no databases are configured.
+	allTools = append(
+		allTools,
+		tools.NewDBSchemaTool(c.permissions,
+			c.databaseConfigs,
+			c.cfg.Resolve),
+		tools.NewDBQueryTool(c.permissions,
+			c.databaseConfigs,
+			c.cfg.Resolve),
+		tools.NewOpenAPISpecTool(c.permissions, c.cfg.WorkingDir()),
+	)
 
 	var filteredTools []fantasy.AgentTool
 	for _, tool := range allTools {

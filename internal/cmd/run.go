@@ -483,6 +483,12 @@ func (s *runStream) handle(ev any, stopSpinner func()) (done bool, err error) {
 		return true, nil
 
 	case pubsub.Event[proto.AgentEvent]:
+		if string(e.Payload.Type) == "routing_observation" {
+			if e.Payload.SessionID == s.sessionID && (s.runID == "" || e.Payload.RunID == s.runID) {
+				fmt.Fprintln(os.Stderr, e.Payload.RoutingSummary)
+			}
+			return false, nil
+		}
 		if e.Payload.Error == nil {
 			return false, nil
 		}
