@@ -24,6 +24,12 @@ const (
 	// microcompactMinContent is the tool-output size below which pruning is
 	// pointless and would only add noise.
 	microcompactMinContent = 2 * 1024
+	// workingSetUserMessages is how many of the user's own recent messages
+	// are quoted verbatim in the working set. Their words are the one thing
+	// a summary should not paraphrase.
+	workingSetUserMessages = 2
+	// workingSetUserMessageBudget bounds each quoted message.
+	workingSetUserMessageBudget = 2 * 1024
 )
 
 // workingSetFile is one file carried across a compaction.
@@ -128,10 +134,44 @@ func buildWorkingSetMessage(msgs []message.Message, workingDir, transcriptPath s
 			b.WriteString("</file>\n")
 		}
 	}
+	if quotes := recentUserMessages(msgs, workingSetUserMessages); len(quotes) > 0 {
+		b.WriteString("\nRecent user messages, verbatim:\n")
+		for _, quote := range quotes {
+			b.WriteString("\n> " + quote + "\n")
+		}
+	}
 	if transcriptPath != "" {
 		fmt.Fprintf(&b, "\nFull transcript: %s\n", transcriptPath)
 	}
 	return b.String()
+}
+
+// recentUserMessages returns the last limit user text messages, oldest
+// first, each cut to a fixed budget.
+func recentUserMessages(msgs []message.Message, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	var quotes []string
+	for i := len(msgs) - 1; i >= 0 && len(quotes) < limit; i-- {
+		msg := msgs[i]
+		if msg.Role != message.User || msg.IsSummaryMessage {
+			continue
+		}
+		text := strings.TrimSpace(msg.Content().Text)
+		if text == "" {
+			continue
+		}
+		if len(text) > workingSetUserMessageBudget {
+			text = text[:workingSetUserMessageBudget] + " [truncated]"
+		}
+		quotes = append(quotes, strings.ReplaceAll(text, "\n", "\n> "))
+	}
+	// Restore chronological order.
+	for i, j := 0, len(quotes)-1; i < j; i, j = i+1, j-1 {
+		quotes[i], quotes[j] = quotes[j], quotes[i]
+	}
+	return quotes
 }
 
 // microcompactMessages prunes tool output that is no longer load-bearing.

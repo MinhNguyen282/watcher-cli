@@ -626,18 +626,32 @@ Landed in this repository:
   rule.
 - Tests: `internal/permission/policy_test.go`.
 
-### Phase 3 — compaction (partial)
+### Phase 3 — compaction (partial, resumable working set complete)
 
 - `internal/agent/compaction.go`: re-read the five most recently viewed
   files after a summary into a hidden working-set message, plus
   `microcompactMessages` pruning old tool output near the threshold.
 - `Summarize` emits the working set and honours `PreCompact` veto /
   `PostCompact` notice.
+- The working set quotes the user's last two messages verbatim, so their
+  own words survive a summary that would otherwise paraphrase them.
 - Tests: `internal/agent/compaction_test.go`.
 - Not done: background precompute, dedicated compact-boundary rows,
-  idle compaction, preserved-tail markers in SQLite.
+  idle compaction, preserved-tail rows in SQLite.
 
-### Phase 5 — hooks (partial, high-value events)
+### Phase 4 — subagents (partial)
+
+- `agent` tool accepts `subagent_type`: `task` (default), `explore`
+  (tool list filtered to `Spec.ReadOnly` tools), `plan` (the coordinator's
+  configured plan agent), and `fork` (copies the last 40 parent messages
+  into the child session before running).
+- Unknown types are refused with a typed error; the plan agent is resolved
+  from the coordinator's built agents, which keeps the plan agent's own
+  `agent` tool from recursing through construction.
+- Tests: `TestReadOnlyToolNames`.
+- Not done: background subagents, `send_message`/handback protocol.
+
+### Phase 5 — hooks (most events)
 
 - `internal/hooks/hooks.go`: 19-event surface with `Events`/`IsEvent`.
 - `internal/hooks/runner.go`: per-event runners
@@ -645,13 +659,40 @@ Landed in this repository:
   PreToolUse-only compatibility constructor.
 - Pipeline emits `PermissionRequest` (can allow/deny), `PermissionDenied`,
   `PostToolUse`, `PostToolUseFailure`.
-- Agent emits `UserPromptSubmit` (can block a turn), `Stop`, `PreCompact`,
-  `PostCompact`; coordinator emits `SubagentStart`/`SubagentStop`.
+- Agent emits `UserPromptSubmit` (can block a turn), `SessionStart` (first
+  turn), `Stop`, `PreCompact`, `PostCompact`, `PostToolBatch`; coordinator
+  emits `SubagentStart`/`SubagentStop`.
+- Pipeline emits `FileChanged` after a successful mutating file tool, and
+  `CwdChanged` is emitted when the environment snapshot sees the working
+  directory move.
 - Config rejects unknown hook events at load time and normalizes all known
   spellings.
-- Not done: `SessionStart`/`SessionEnd`, `FileChanged`, `CwdChanged`,
-  `InstructionsLoaded`, `TaskCreated`/`TaskCompleted`, `Notification`,
-  `MessageDisplay`, `PostToolBatch`.
+- Not done: `SessionEnd`, `InstructionsLoaded`, `TaskCreated`/
+  `TaskCompleted`, `Notification`, `MessageDisplay`.
+
+### Phase 6 — deferred tools and accounting (complete)
+
+- `internal/agent/tools/tool_search.go`: `tool_search` reveals deferred
+  schemas (undeclared tools, i.e. MCP and plugins) ranked by name, hint and
+  description; loaded tools stay available for the session.
+- `sessionAgent.filterDeferredTools` withholds deferred schemas from the
+  request until loaded, driven by `options.tool_search`.
+- `context_usage` reports the window, last prompt tokens, system-prompt and
+  schema estimates, and the active/loaded/deferred split
+  (`internal/agent/context_report.go`).
+- Prompt gains a `Tool search` block when the feature is on.
+- Tests: `tool_search_test.go`, `context_report_test.go`.
+
+### Phase 8 — memory and reminders (complete)
+
+- `internal/memory`: typed (`user`/`project`/`team`) file-backed store with
+  validation, secret guards, size limits and atomic writes.
+- Tools `memory_save`, `memory_search`, `memory_forget`; the prompt gains a
+  `# Memory` block describing when to use them.
+- `internal/agent/reminders.go`: `<system-reminder>` hidden messages are
+  inserted before the newest user turn; a denied tool call now produces one
+  adjustment reminder instead of silence.
+- Tests: `internal/memory/memory_test.go`, `reminders_test.go`.
 
 ### Phase 7 — plan mode (complete)
 
@@ -668,11 +709,15 @@ Landed in this repository:
 
 ### Still open
 
-- Phase 4: typed subagents beyond the existing single task agent, a `fork`
-  variant that inherits context, and the send/handback protocol.
-- Phase 6: deferred tool schemas + tool search + `/context` accounting.
-- Phase 8: typed memory stores and structured system reminders.
+- Phase 4 remainder: background subagents with status reporting, and the
+  `send_message`/handback protocol.
+- Phase 5 remainder: `SessionEnd`, `InstructionsLoaded`,
+  `TaskCreated`/`TaskCompleted`, `Notification`, `MessageDisplay`.
+- Phase 3 remainder: background precompute, compact-boundary rows, idle
+  compaction.
 - Provider-level per-block cache scopes: blocks are ordered and labelled,
   but `fantasy` still receives one system prompt, so only prefix ordering
   (not per-block cache breakpoints) is realised.
-- CLI flag and UI surface for the permission mode (config only today).
+- UI surface for the permission mode: the `--permission-mode` flag and
+  `permissions.mode` work (including the client-server path), but there is no
+  in-TUI mode switcher yet.

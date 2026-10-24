@@ -35,6 +35,7 @@ import (
 	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/log"
 	"github.com/charmbracelet/crush/internal/lsp"
+	"github.com/charmbracelet/crush/internal/memory"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
@@ -170,6 +171,17 @@ type coordinator struct {
 	planModeOnce  sync.Once
 	planModeState *tools.PlanModeState
 
+	// toolSearch tracks loaded deferred schemas. Nil when the feature is
+	// off, which also disables deferral.
+	toolSearch *tools.ToolSearchState
+
+	// systemPromptText is the last built system prompt, used for context
+	// accounting.
+	systemPromptText *csync.Value[string]
+
+	// memory is the durable note store behind the memory tools.
+	memory *memory.Store
+
 	// agentMu guards mainAgent and mainAgentName: SetMainAgent runs on
 	// HTTP handler goroutines while runs, cancels, and probes read the
 	// current agent from their own goroutines.
@@ -260,6 +272,18 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 
 	c.repoMap = repomap.New(opts.Config.WorkingDir())
 
+	c.systemPromptText = csync.NewValue("")
+
+	if memStore, memErr := memory.NewStore(filepath.Join(opts.Config.Config().Options.DataDirectory, "memory")); memErr != nil {
+		slog.Warn("Failed to open memory store; memory tools disabled", "error", memErr)
+	} else {
+		c.memory = memStore
+	}
+
+	if opts.Config.Config().Options.ToolSearch {
+		c.toolSearch = tools.NewToolSearchState()
+	}
+
 	if configuredHooks := opts.Config.Config().Hooks; len(configuredHooks) > 0 {
 		c.hookRunner = hooks.NewRunnerForEvents(
 			configuredHooks,
@@ -303,6 +327,15 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 	c.mainAgent = agent
 	c.mainAgentName = config.AgentCoder
 	return c, nil
+}
+
+// promptText returns the last built system prompt, or "" when the
+// coordinator was built without accounting (tests, embedders).
+func (c *coordinator) promptText() string {
+	if c.systemPromptText == nil {
+		return ""
+	}
+	return c.systemPromptText.Get()
 }
 
 // activeAgent returns the coordinator's current main agent and its config
@@ -882,6 +915,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		Notify:               c.notify,
 		RunComplete:          c.runComplete,
 		Hooks:                c.hookRunner,
+		ToolSearch:           c.toolSearch,
 	})
 
 	// The readiness goroutines below perform one-time setup — building the
@@ -903,6 +937,9 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		}
 		systemPrompt = appendHarnessPrompt(systemPrompt, c.cfg.WorkingDir())
 		systemPrompt = appendRepoMapPrompt(initCtx, systemPrompt, c.repoMap)
+		if c.systemPromptText != nil {
+			c.systemPromptText.Set(systemPrompt)
+		}
 		result.SetSystemPrompt(systemPrompt)
 		return nil
 	})
@@ -952,6 +989,15 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	logFile := filepath.Join(c.cfg.Config().Options.DataDirectory, "logs", "crush.log")
 
 	hookRunner := c.hookRunner
+
+	if c.memory != nil {
+		allTools = append(
+			allTools,
+			tools.NewMemorySaveTool(c.memory),
+			tools.NewMemorySearchTool(c.memory),
+			tools.NewMemoryForgetTool(c.memory),
+		)
+	}
 
 	allTools = append(
 		allTools,
@@ -1060,6 +1106,29 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	slices.SortFunc(filteredTools, func(a, b fantasy.AgentTool) int {
 		return strings.Compare(a.Info().Name, b.Info().Name)
 	})
+
+	// The harness tools sit outside the allowlist: they are read-only and
+	// they must see the full catalog, including deferred schemas.
+	catalog := slices.Clone(filteredTools)
+	if c.toolSearch != nil {
+		filteredTools = append(filteredTools, tools.NewToolSearchTool(catalog))
+	}
+	window := int64(0)
+	if modelCfg, ok := c.cfg.Config().Models[agent.Model]; ok {
+		if model := c.cfg.Config().GetModel(modelCfg.Provider, modelCfg.Model); model != nil {
+			window = int64(model.ContextWindow)
+		}
+	}
+	filteredTools = append(filteredTools, tools.NewContextUsageTool(func(ctx context.Context) string {
+		return buildContextReport(
+			window,
+			tools.GetSessionFromContext(ctx),
+			c.sessions,
+			c.promptText(),
+			catalog,
+			c.toolSearch,
+		)
+	}))
 
 	// Shadow checkpoints wrap the mutating tools of the top-level agent
 	// only: sub-agents run on the same working directory, so the next
@@ -1725,6 +1794,9 @@ type subAgentParams struct {
 	// SessionSetup is an optional callback invoked after session creation
 	// but before agent execution, for custom session configuration.
 	SessionSetup func(sessionID string)
+	// InheritContext seeds the child session with the parent's recent
+	// messages so a fork starts from the same conversation.
+	InheritContext bool
 }
 
 // callTopK returns topK for use on fantasy.Call.TopK, suppressing it for
@@ -1752,6 +1824,10 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 	// Call session setup function if provided
 	if params.SessionSetup != nil {
 		params.SessionSetup(session.ID)
+	}
+
+	if params.InheritContext {
+		c.inheritParentContext(ctx, params.SessionID, session.ID)
 	}
 
 	// Get model configuration
@@ -1982,4 +2058,52 @@ func logDiscoveryStats(
 		"prompt_tok_est", skills.ApproxTokenCount(xml),
 		"active_names", activeNames,
 	)
+}
+
+// forkContextMessageLimit bounds how much of the parent conversation a fork
+// inherits. Enough to carry the working understanding, small enough that a
+// fork cannot reintroduce the pressure compaction just removed.
+const forkContextMessageLimit = 40
+
+// inheritParentContext copies the tail of the parent conversation into the
+// child session. Failures are logged: a fork that starts without context is
+// still a working agent, just a less informed one.
+func (c *coordinator) inheritParentContext(ctx context.Context, parentSessionID, childSessionID string) {
+	parentMessages, err := c.messages.List(ctx, parentSessionID)
+	if err != nil {
+		slog.Warn("Fork could not read parent context", "parent_session", parentSessionID, "error", err)
+		return
+	}
+	if len(parentMessages) > forkContextMessageLimit {
+		parentMessages = parentMessages[len(parentMessages)-forkContextMessageLimit:]
+	}
+	copied := 0
+	for _, msg := range parentMessages {
+		if msg.IsSummaryMessage {
+			// The summary is not a message the model can replay verbatim;
+			// the fork inherits the real turns that follow it.
+			continue
+		}
+		if msg.Role == message.Tool {
+			continue
+		}
+		parts := make([]message.ContentPart, 0, len(msg.Parts))
+		for _, part := range msg.Parts {
+			parts = append(parts, part)
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		if _, createErr := c.messages.Create(ctx, childSessionID, message.CreateMessageParams{
+			Role:     msg.Role,
+			Parts:    parts,
+			Model:    msg.Model,
+			Provider: msg.Provider,
+		}); createErr != nil {
+			slog.Warn("Fork could not copy parent message", "parent_session", parentSessionID, "error", createErr)
+			return
+		}
+		copied++
+	}
+	slog.Info("Fork inherited parent context", "parent_session", parentSessionID, "child_session", childSessionID, "messages", copied)
 }

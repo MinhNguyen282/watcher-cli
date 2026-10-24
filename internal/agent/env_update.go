@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"time"
 
 	"github.com/charmbracelet/crush/internal/agent/prompt"
@@ -65,7 +67,7 @@ func envChanges(prev, next envSnapshot) []string {
 // changed since the last time this session was told about it. The first call
 // only records the baseline: the environment is already in the system
 // prompt.
-func (a *sessionAgent) environmentUpdate(sessionID string) (string, bool) {
+func (a *sessionAgent) environmentUpdate(ctx context.Context, sessionID string) (string, bool) {
 	current, ok := snapshotEnv(a.cfg)
 	if !ok {
 		return "", false
@@ -80,6 +82,9 @@ func (a *sessionAgent) environmentUpdate(sessionID string) (string, bool) {
 		return "", false
 	}
 	a.envStates.Set(sessionID, current)
+	if slices.Contains(changed, "the working directory") {
+		a.emitCwdChanged(ctx, sessionID, current.WorkingDir)
+	}
 	block := prompt.EnvironmentUpdate(prompt.PromptDat{
 		WorkingDir: current.WorkingDir,
 		IsGitRepo:  current.IsGitRepo,

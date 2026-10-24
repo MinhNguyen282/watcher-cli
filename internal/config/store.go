@@ -61,6 +61,9 @@ type fileSnapshot struct {
 // the lifetime of the process (or workspace).
 type RuntimeOverrides struct {
 	SkipPermissionRequests bool
+	// PermissionMode overrides permissions.mode for this process, set by
+	// the --permission-mode flag. Empty means "use the config value".
+	PermissionMode string
 	// EnabledChannels lists the MCP servers opted in as channels for this
 	// session (via the --channels flag). A server present in MCP config only
 	// pushes channel events when it also appears here. Entries may be written

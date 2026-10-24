@@ -481,6 +481,10 @@ type Options struct {
 	Debug                bool        `json:"debug,omitempty" jsonschema:"description=Enable debug logging,default=false"`
 	DebugLSP             bool        `json:"debug_lsp,omitempty" jsonschema:"description=Enable debug logging for LSP servers,default=false"`
 	DisableAutoSummarize bool        `json:"disable_auto_summarize,omitempty" jsonschema:"description=Disable automatic conversation summarization,default=false"`
+	// ToolSearch withholds the schemas of tools the agent did not declare
+	// (MCP server tools, plugins) until the model searches for them. It
+	// keeps large tool sets out of the context window.
+	ToolSearch bool `json:"tool_search,omitempty" jsonschema:"description=Let the model load tool schemas on demand instead of sending every schema up front,default=false"`
 	// DataDirectory is where Crush keeps per-project state such as
 	// the SQLite database and workspace overrides. Relative paths are
 	// resolved against the working directory; absolute paths are used
@@ -1136,6 +1140,11 @@ func allToolNames() []string {
 		"verify",
 		"view",
 		"write",
+		"tool_search",
+		"context_usage",
+		"memory_save",
+		"memory_search",
+		"memory_forget",
 		"list_mcp_resources",
 		"read_mcp_resource",
 	}
@@ -1150,7 +1159,7 @@ func resolveAllowedTools(allTools []string, disabledTools []string) []string {
 }
 
 func resolveReadOnlyTools(tools []string) []string {
-	readOnlyTools := []string{"db_query", "db_schema", "openapi_spec", "glob", "grep", "ls", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "repo_map", "sourcegraph", "view"}
+	readOnlyTools := []string{"db_query", "db_schema", "openapi_spec", "glob", "grep", "ls", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "repo_map", "sourcegraph", "view", "tool_search", "context_usage", "memory_search"}
 	// filter to only include tools that are in allowedtools (include mode)
 	return filterSlice(tools, readOnlyTools, true)
 }
@@ -1173,6 +1182,9 @@ func resolvePlanTools(tools []string) []string {
 		"repo_map",
 		"sourcegraph",
 		"view",
+		"tool_search",
+		"context_usage",
+		"memory_search",
 	}
 	return filterSlice(tools, planTools, true)
 }

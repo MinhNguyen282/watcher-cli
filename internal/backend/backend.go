@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/db"
+	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/ui/util"
@@ -434,6 +435,13 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 	}
 
 	cfg.Overrides().SkipPermissionRequests = args.YOLO
+	if args.PermissionMode != "" {
+		mode, modeErr := permission.ParseMode(args.PermissionMode)
+		if modeErr != nil {
+			return nil, proto.Workspace{}, fmt.Errorf("invalid --permission-mode: %w", modeErr)
+		}
+		cfg.Overrides().PermissionMode = string(mode)
+	}
 	cfg.Overrides().EnabledChannels = args.Channels
 
 	if err := createDotCrushDir(cfg.Config().Options.DataDirectory); err != nil {

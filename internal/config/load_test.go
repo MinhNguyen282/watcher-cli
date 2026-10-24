@@ -825,11 +825,11 @@ func TestConfig_setupAgentsWithNoDisabledTools(t *testing.T) {
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
-	assert.Equal(t, []string{"db_query", "db_schema", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "openapi_spec", "repo_map", "sourcegraph", "view"}, taskAgent.AllowedTools)
+	assert.Equal(t, []string{"db_query", "db_schema", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "openapi_spec", "repo_map", "sourcegraph", "view", "tool_search", "context_usage", "memory_search"}, taskAgent.AllowedTools)
 
 	planAgent, ok := cfg.Agents[AgentPlan]
 	require.True(t, ok)
-	assert.Equal(t, []string{"agent", "db_query", "db_schema", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "openapi_spec", "question", "repo_map", "sourcegraph", "view"}, planAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "db_query", "db_schema", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "openapi_spec", "question", "repo_map", "sourcegraph", "view", "tool_search", "context_usage", "memory_search"}, planAgent.AllowedTools)
 }
 
 func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
@@ -847,15 +847,15 @@ func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
 
-	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "db_query", "db_schema", "job_output", "job_kill", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "glob", "ls", "openapi_spec", "question", "repo_map", "sourcegraph", "todos", "verify", "view", "write", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "db_query", "db_schema", "job_output", "job_kill", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "glob", "ls", "openapi_spec", "question", "repo_map", "sourcegraph", "todos", "verify", "view", "write", "tool_search", "context_usage", "memory_save", "memory_search", "memory_forget", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
-	assert.Equal(t, []string{"db_query", "db_schema", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "ls", "openapi_spec", "repo_map", "sourcegraph", "view"}, taskAgent.AllowedTools)
+	assert.Equal(t, []string{"db_query", "db_schema", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "ls", "openapi_spec", "repo_map", "sourcegraph", "view", "tool_search", "context_usage", "memory_search"}, taskAgent.AllowedTools)
 
 	planAgent, ok := cfg.Agents[AgentPlan]
 	require.True(t, ok)
-	assert.Equal(t, []string{"agent", "db_query", "db_schema", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "ls", "openapi_spec", "question", "repo_map", "sourcegraph", "view"}, planAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "db_query", "db_schema", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "ls", "openapi_spec", "question", "repo_map", "sourcegraph", "view", "tool_search", "context_usage", "memory_search"}, planAgent.AllowedTools)
 }
 
 func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {
@@ -875,6 +875,9 @@ func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {
 				"repo_map",
 				"sourcegraph",
 				"view",
+				"tool_search",
+				"context_usage",
+				"memory_search",
 			},
 		},
 	}
@@ -882,7 +885,7 @@ func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {
 	cfg.SetupAgents()
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
-	assert.Equal(t, []string{"bash", "crush_info", "crush_logs", "job_output", "job_kill", "download", "edit", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "question", "todos", "verify", "write", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
+	assert.Equal(t, []string{"bash", "crush_info", "crush_logs", "job_output", "job_kill", "download", "edit", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "question", "todos", "verify", "write", "memory_save", "memory_forget", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)

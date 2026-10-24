@@ -40,7 +40,7 @@ func TestPlanPromptListsConfiguredTools(t *testing.T) {
 	systemPrompt, err := p.Build(context.Background(), "mock", "mock-model", cfg)
 	require.NoError(t, err)
 	require.Contains(t, systemPrompt,
-		"Your available tools are: agent, db_query, db_schema, lsp_symbols, lsp_definition, lsp_call_hierarchy, glob, grep, ls, openapi_spec, question, repo_map, sourcegraph, view.")
+		"Your available tools are: agent, db_query, db_schema, lsp_symbols, lsp_definition, lsp_call_hierarchy, glob, grep, ls, openapi_spec, question, repo_map, sourcegraph, view, tool_search, context_usage, memory_search.")
 
 	// A tool the user disabled disappears from the advertised list.
 	// (The word "question" still appears elsewhere in the prompt's rules,
@@ -50,6 +50,6 @@ func TestPlanPromptListsConfiguredTools(t *testing.T) {
 	systemPrompt, err = p.Build(context.Background(), "mock", "mock-model", cfg)
 	require.NoError(t, err)
 	require.Contains(t, systemPrompt,
-		"Your available tools are: agent, db_query, db_schema, lsp_symbols, lsp_definition, lsp_call_hierarchy, glob, grep, ls, openapi_spec, repo_map, sourcegraph, view.")
+		"Your available tools are: agent, db_query, db_schema, lsp_symbols, lsp_definition, lsp_call_hierarchy, glob, grep, ls, openapi_spec, repo_map, sourcegraph, view, tool_search, context_usage, memory_search.")
 	require.NotContains(t, systemPrompt, "ls, question,")
 }

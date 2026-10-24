@@ -445,7 +445,38 @@ func (p *toolPipeline) emitToolOutcome(ctx context.Context, call fantasy.ToolCal
 	if result.HookCount > 0 {
 		response.Metadata = mergeHookMetadata(response.Metadata, result)
 	}
+	if outcome == "completed" {
+		p.emitFileChanged(ctx, call)
+	}
 	return response
+}
+
+// fileMutatingTools are the tools whose successful call changed a file the
+// FileChanged hook should hear about.
+var fileMutatingTools = map[string]bool{
+	tools.EditToolName:          true,
+	tools.MultiEditToolName:     true,
+	tools.WriteToolName:         true,
+	tools.RenameToolName:        true,
+	tools.ReplaceSymbolToolName: true,
+}
+
+// emitFileChanged notifies observers that a file was written. Observational.
+func (p *toolPipeline) emitFileChanged(ctx context.Context, call fantasy.ToolCall) {
+	if p.runner == nil || !fileMutatingTools[call.Name] || !p.runner.HasEvent(hooks.EventFileChanged) {
+		return
+	}
+	path := tools.RuleContentFor(call.Name, call.Input)
+	if path == "" {
+		return
+	}
+	input, err := json.Marshal(map[string]string{"tool": call.Name, "file_path": path})
+	if err != nil {
+		return
+	}
+	if _, err := p.runner.Run(ctx, hooks.EventFileChanged, tools.GetSessionFromContext(ctx), call.Name, string(input)); err != nil {
+		slog.Warn("FileChanged hook failed", "tool", call.Name, "error", err)
+	}
 }
 
 // emitPermissionDenied notifies observers that a call was refused. It never

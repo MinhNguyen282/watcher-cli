@@ -1449,6 +1449,7 @@ var hookEventNames = []string{
 	"PreToolUse",
 	"PostToolUse",
 	"PostToolUseFailure",
+	"PostToolBatch",
 	"PermissionRequest",
 	"PermissionDenied",
 	"UserPromptSubmit",

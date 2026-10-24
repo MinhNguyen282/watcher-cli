@@ -66,25 +66,25 @@ func TestEnvironmentUpdateLifecycle(t *testing.T) {
 
 	// The first call records the baseline: the environment is already in the
 	// system prompt, so no notice is emitted.
-	update, changed := agent.environmentUpdate("session-1")
+	update, changed := agent.environmentUpdate(t.Context(), "session-1")
 	require.False(t, changed)
 	require.Empty(t, update)
 
 	// Same environment, no notice.
-	update, changed = agent.environmentUpdate("session-1")
+	update, changed = agent.environmentUpdate(t.Context(), "session-1")
 	require.False(t, changed)
 	require.Empty(t, update)
 
 	// A git repository appearing under the working directory is a change
 	// the session must be told about.
 	require.NoError(t, os.Mkdir(filepath.Join(workingDir, ".git"), 0o755))
-	update, changed = agent.environmentUpdate("session-1")
+	update, changed = agent.environmentUpdate(t.Context(), "session-1")
 	require.True(t, changed)
 	require.Contains(t, update, "# Environment update")
 	require.Contains(t, update, "whether the directory is a git repository")
 	require.Contains(t, update, "Is directory a git repo: yes")
 
 	// The update is emitted once, not on every step.
-	_, changed = agent.environmentUpdate("session-1")
+	_, changed = agent.environmentUpdate(t.Context(), "session-1")
 	require.False(t, changed)
 }

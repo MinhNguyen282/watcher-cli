@@ -3,6 +3,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -103,17 +104,21 @@ type App struct {
 // applyPermissionPolicy compiles the configured permission mode and rules
 // into the service. An invalid mode or rule is a startup error: silently
 // falling back would change what the agent is allowed to do.
-func applyPermissionPolicy(service permission.Service, cfg *config.Permissions) error {
+func applyPermissionPolicy(service permission.Service, cfg *config.Permissions, modeOverride string) error {
 	modeService, ok := service.(permission.ModeService)
 	if !ok {
 		return nil
 	}
 	if cfg == nil {
-		modeService.SetMode(permission.ModeDefault)
+		mode, err := permission.ParseMode(modeOverride)
+		if err != nil {
+			return err
+		}
+		modeService.SetMode(mode)
 		modeService.SetModeOptions(permission.ModeOptions{BypassAllowed: true})
 		return nil
 	}
-	mode, err := permission.ParseMode(cfg.Mode)
+	mode, err := permission.ParseMode(cmp.Or(modeOverride, cfg.Mode))
 	if err != nil {
 		return err
 	}
@@ -142,7 +147,7 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 	}
 
 	permissions := permission.NewPermissionService(store.WorkingDir(), skipPermissionsRequests, allowedTools)
-	if err := applyPermissionPolicy(permissions, cfg.Permissions); err != nil {
+	if err := applyPermissionPolicy(permissions, cfg.Permissions, store.Overrides().PermissionMode); err != nil {
 		return nil, err
 	}
 

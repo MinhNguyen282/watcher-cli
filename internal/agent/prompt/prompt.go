@@ -113,6 +113,8 @@ func (p *Prompt) BuildSet(ctx context.Context, provider, model string, store *co
 	}
 	blocks := []Block{
 		{Name: "instructions", Text: static, Scope: ScopeOrg},
+		ToolSearchBlock(d),
+		MemoryBlock(),
 		EnvironmentBlock(d),
 	}
 	if p.dynamicTemplate != "" {

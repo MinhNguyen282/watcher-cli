@@ -32,6 +32,8 @@ const (
 	EventPostToolUse = "PostToolUse"
 	// EventPostToolUseFailure runs after a tool call fails.
 	EventPostToolUseFailure = "PostToolUseFailure"
+	// EventPostToolBatch runs once per step with every call the step made.
+	EventPostToolBatch = "PostToolBatch"
 	// EventPermissionDenied runs after a call is denied.
 	EventPermissionDenied = "PermissionDenied"
 	// EventPostCompact runs after compaction completes.
@@ -64,6 +66,7 @@ var Events = []string{
 	EventPreToolUse,
 	EventPostToolUse,
 	EventPostToolUseFailure,
+	EventPostToolBatch,
 	EventPermissionRequest,
 	EventPermissionDenied,
 	EventUserPromptSubmit,

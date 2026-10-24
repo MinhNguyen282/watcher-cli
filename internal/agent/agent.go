@@ -217,6 +217,7 @@ type sessionAgent struct {
 	notify               pubsub.Publisher[notify.Notification]
 	runComplete          pubsub.Publisher[notify.RunComplete]
 	hooks                *hooks.Runner
+	toolSearch           *tools.ToolSearchState
 
 	messageQueue   *csync.Map[string, []SessionAgentCall]
 	activeRequests *csync.Map[string, *activeCancel]
@@ -224,6 +225,10 @@ type sessionAgent struct {
 	// so a mid-session change produces one replacement notice instead of a
 	// stale working directory.
 	envStates *csync.Map[string, envSnapshot]
+	// reminders queues application context for the next step of a session.
+	reminders *csync.Map[string, []string]
+	// started records sessions whose SessionStart hook already fired.
+	started *csync.Map[string, bool]
 
 	// dispatchMu holds a per-session mutex that serializes the
 	// accepted -> (cancel-on-entry | queued | active) transition in
@@ -281,6 +286,9 @@ type SessionAgentOptions struct {
 	RunComplete          pubsub.Publisher[notify.RunComplete]
 	// Hooks runs lifecycle hook events. Nil disables hooks for this agent.
 	Hooks *hooks.Runner
+	// ToolSearch holds which deferred tool schemas are loaded. Nil disables
+	// deferral for this agent.
+	ToolSearch *tools.ToolSearchState
 }
 
 func NewSessionAgent(
@@ -301,9 +309,12 @@ func NewSessionAgent(
 		notify:               opts.Notify,
 		runComplete:          opts.RunComplete,
 		hooks:                opts.Hooks,
+		toolSearch:           opts.ToolSearch,
 		messageQueue:         csync.NewMap[string, []SessionAgentCall](),
 		activeRequests:       csync.NewMap[string, *activeCancel](),
 		envStates:            csync.NewMap[string, envSnapshot](),
+		reminders:            csync.NewMap[string, []string](),
+		started:              csync.NewMap[string, bool](),
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
 		acceptedRuns:         csync.NewMap[string, int](),
 		cancelMark:           csync.NewMap[string, uint64](),
@@ -823,6 +834,8 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		go a.GenerateTitle(titleCtx, call.SessionID, call.Prompt)
 	}
 
+	a.emitSessionStart(ctx, call)
+
 	// Add the user message to the session.
 	_, err = a.createUserMessage(ctx, call)
 	if err != nil {
@@ -904,6 +917,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				callContext,
 				filterToolsForChannel(a.tools.Copy(), call.Channel, mcp.GetStates()),
 			)
+			prepared.Tools = a.filterDeferredTools(prepared.Tools)
+			// The search tool needs the session's promotion state; it is
+			// carried in the context so the tool itself stays stateless.
+			callContext = tools.WithToolSearchState(callContext, a.toolSearch)
 
 			// Drain queued follow-up prompts for this step. Calls covered
 			// by a cancel recorded while they sat in the queue are dropped:
@@ -958,12 +975,18 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				}
 			}
 
+			if reminder, ok := reminderMessageFor(a.drainReminders(call.SessionID)); ok {
+				if ai := reminder.ToAIMessage(); len(ai) > 0 {
+					prepared.Messages = insertReminder(prepared.Messages, ai[0])
+				}
+			}
+
 			// System-level context goes before the conversation. The
 			// environment update is prepended first so the stable prefix
 			// message stays immediately after it, keeping the cacheable
 			// prefix contiguous.
 			var prefixMessages []fantasy.Message
-			if update, changed := a.environmentUpdate(call.SessionID); changed {
+			if update, changed := a.environmentUpdate(callContext, call.SessionID); changed {
 				prefixMessages = append(prefixMessages, fantasy.NewSystemMessage(update))
 			}
 			if promptPrefix != "" {
@@ -1089,6 +1112,9 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			if !toolResult.IsError && toolResult.Name != "" {
 				completedToolCalls.Set(toolResult.Name, struct{}{})
 			}
+			if toolResult.IsError && strings.Contains(toolResult.Content, "User denied permission") {
+				a.queueReminder(call.SessionID, permissionDeniedReminder(toolResult.Name))
+			}
 			// Use parent ctx instead of genCtx to ensure the message is created
 			// even if the request is canceled mid-stream
 			_, createMsgErr := a.messages.Create(ctx, currentAssistant.SessionID, message.CreateMessageParams{
@@ -1103,6 +1129,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return createMsgErr
 		},
 		OnStepFinish: func(stepResult fantasy.StepResult) error {
+			a.emitPostToolBatch(genCtx, call.SessionID, stepResult)
 			for _, w := range stepResult.Warnings {
 				slog.Warn("Provider warning", "type", w.Type, "message", w.Message)
 			}
@@ -1779,6 +1806,23 @@ If not, please feel free to ignore. Again do not mention this message to the use
 // by every session in the repository, including sub-agent sessions.
 // Connections are process-global and left untouched; only the tool list
 // changes.
+// filterDeferredTools withholds tool schemas the model has not loaded yet.
+// It is a no-op when tool search is disabled.
+func (a *sessionAgent) filterDeferredTools(list []fantasy.AgentTool) []fantasy.AgentTool {
+	if a.toolSearch == nil {
+		return list
+	}
+	out := make([]fantasy.AgentTool, 0, len(list))
+	for _, tool := range list {
+		name := tool.Info().Name
+		if tools.IsDeferrable(name) && !a.toolSearch.IsPromoted(name) {
+			continue
+		}
+		out = append(out, tool)
+	}
+	return out
+}
+
 func (a *sessionAgent) filterDisabledMCPTools(ctx context.Context, toolList []fantasy.AgentTool) []fantasy.AgentTool {
 	disabledServers, err := a.sessions.MCPDisabledServers(ctx)
 	if err != nil {

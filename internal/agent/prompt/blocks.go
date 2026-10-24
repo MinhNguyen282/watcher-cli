@@ -96,6 +96,36 @@ func (s Set) BoundaryOffset() int {
 	return len(static) + 2 // two newlines between the prefix and the tail
 }
 
+// ToolSearchBlock explains deferred tool schemas when the feature is on.
+func ToolSearchBlock(d PromptDat) Block {
+	if !d.Config.Options.ToolSearch {
+		return Block{}
+	}
+	return Block{
+		Name: "tool-search",
+		Text: "# Tool search\n" +
+			"Some tools are deferred: their schemas are not in your tool list until you load them. " +
+			"When you need a capability that is not in your list, call `tool_search` with a short description of what you want to do. " +
+			"Loaded tools stay available for the rest of the session.",
+		Dynamic: true,
+	}
+}
+
+// MemoryBlock tells the model how durable memory works. It is static text:
+// the store's contents are searched on demand, never injected wholesale.
+func MemoryBlock() Block {
+	return Block{
+		Name: "memory",
+		Text: "# Memory\n" +
+			"You have a durable memory store for facts worth keeping across sessions: user preferences, project conventions, and decisions that are not obvious from the code. " +
+			"Search it with `memory_search` before asking the user to repeat themselves or before choosing a workflow. " +
+			"Save with `memory_save` when the user says to remember something, when you learn a command or convention you will need again, or when a decision was made for a reason that is not in the repository. " +
+			"Forget with `memory_forget` when an entry is wrong or the user asks you to. " +
+			"Never save secrets, credentials, task progress, or anything already written down in the repository.",
+		Dynamic: true,
+	}
+}
+
 // EnvironmentBlock renders the structured environment record. It is the one
 // block that changes during a session, so it stays at the end of the prompt
 // and is also what EnvironmentUpdate diffs against.
