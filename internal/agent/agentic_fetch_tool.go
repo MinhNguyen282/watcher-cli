@@ -80,6 +80,11 @@ func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (
 			} else {
 				description = "Search the web and analyze results"
 			}
+			selectedSmallModel := c.cfg.Config().Models[config.SelectedModelTypeSmall]
+			usesDeepSeekSearchFetch := selectedSmallModel.Provider == "deepseek"
+			if usesDeepSeekSearchFetch {
+				description += " (uses DeepSeek Search/Fetch APIs, which may be billed separately per successful request)"
+			}
 
 			p, err := c.permissions.Request(
 				ctx,
@@ -106,13 +111,49 @@ func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (
 			}
 			defer os.RemoveAll(tmpDir)
 
+			// agentic_fetch needs the cheap model: resolve the small slot
+			// as the primary model of a synthetic agent config.
+			_, small, err := c.buildAgentModels(ctx, config.Agent{Model: config.SelectedModelTypeSmall}, true)
+			if err != nil {
+				return fantasy.ToolResponse{}, fmt.Errorf("error building models: %s", err)
+			}
+
+			smallProviderCfg, ok := c.cfg.Config().Providers.Get(small.ModelCfg.Provider)
+			if !ok {
+				return fantasy.ToolResponse{}, errors.New("small model provider not configured")
+			}
+
+			var deepSeekBaseURL, deepSeekAPIKey string
+			if usesDeepSeekSearchFetch {
+				deepSeekBaseURL, err = c.cfg.Resolve(smallProviderCfg.BaseURL)
+				if err != nil {
+					return fantasy.ToolResponse{}, fmt.Errorf("resolve DeepSeek API base URL: %w", err)
+				}
+				deepSeekAPIKey, err = c.cfg.Resolve(smallProviderCfg.APIKey)
+				if err != nil {
+					return fantasy.ToolResponse{}, fmt.Errorf("resolve DeepSeek API key: %w", err)
+				}
+			}
+
 			var fullPrompt string
 
 			if params.URL != "" {
 				// URL mode: fetch the URL content first.
-				content, err := tools.FetchURLAndConvert(ctx, client, params.URL)
-				if err != nil {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to fetch URL: %s", err)), nil
+				var content string
+				if usesDeepSeekSearchFetch {
+					page, err := tools.FetchDeepSeekPage(ctx, client, deepSeekBaseURL, deepSeekAPIKey, params.URL)
+					if err != nil {
+						return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to fetch URL with DeepSeek: %s", err)), nil
+					}
+					content = page.Content
+					if page.Title != "" {
+						content = "# " + page.Title + "\n\n" + content
+					}
+				} else {
+					content, err = tools.FetchURLAndConvert(ctx, client, params.URL)
+					if err != nil {
+						return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to fetch URL: %s", err)), nil
+					}
 				}
 
 				hasLargeContent := len(content) > tools.LargeContentThreshold
@@ -148,25 +189,19 @@ func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (
 				return fantasy.ToolResponse{}, fmt.Errorf("error creating prompt: %s", err)
 			}
 
-			// agentic_fetch needs the cheap model: resolve the small slot
-			// as the primary model of a synthetic agent config.
-			_, small, err := c.buildAgentModels(ctx, config.Agent{Model: config.SelectedModelTypeSmall}, true)
-			if err != nil {
-				return fantasy.ToolResponse{}, fmt.Errorf("error building models: %s", err)
-			}
-
 			systemPrompt, err := promptTemplate.Build(ctx, small.Model.Provider(), small.Model.Model(), c.cfg)
 			if err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("error building system prompt: %s", err)
 			}
 
-			smallProviderCfg, ok := c.cfg.Config().Providers.Get(small.ModelCfg.Provider)
-			if !ok {
-				return fantasy.ToolResponse{}, errors.New("small model provider not configured")
+			var webFetchTool, webSearchTool fantasy.AgentTool
+			if usesDeepSeekSearchFetch {
+				webFetchTool = tools.NewDeepSeekWebFetchTool(tmpDir, client, deepSeekBaseURL, deepSeekAPIKey)
+				webSearchTool = tools.NewDeepSeekWebSearchTool(client, deepSeekBaseURL, deepSeekAPIKey)
+			} else {
+				webFetchTool = tools.NewWebFetchTool(tmpDir, client)
+				webSearchTool = tools.NewWebSearchTool(client)
 			}
-
-			webFetchTool := tools.NewWebFetchTool(tmpDir, client)
-			webSearchTool := tools.NewWebSearchTool(client)
 			fetchTools := []fantasy.AgentTool{
 				webFetchTool,
 				webSearchTool,

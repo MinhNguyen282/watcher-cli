@@ -460,6 +460,7 @@ func (Attribution) JSONSchemaExtend(schema *jsonschema.Schema) {
 }
 
 type Options struct {
+	FrontendWorkflow     bool        `json:"frontend_workflow,omitempty" jsonschema:"description=Use a frontend-focused implementation and verification workflow for UI tasks, including project checks and browser screenshots when available,default=false"`
 	JevObserve           bool        `json:"jev_observe,omitempty" jsonschema:"description=Observe Jev routing suggestions before each prompt without changing agent behavior,default=false"`
 	JevModel             string      `json:"jev_model,omitempty" jsonschema:"description=TypeSafe decision model used by the observer,default=jev-latest"`
 	ContextPaths         []string    `json:"context_paths,omitempty" jsonschema:"description=Paths to files containing context information for the AI,example=.cursorrules,example=CRUSH.md"`

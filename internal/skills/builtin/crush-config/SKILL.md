@@ -53,6 +53,13 @@ permissions allow view ls grep edit
 Values are ordinary Bash — quote and expand normally (`"$VAR"`, `$(cmd)`,
 `${VAR:?required}`). A failing `$(command)` aborts the load.
 
+Enable the frontend-focused implementation and verification workflow for UI
+tasks with `option frontend-workflow true`, or with JSON:
+
+```json
+{"options":{"frontend_workflow":true}}
+```
+
 `CRUSH_VERSION` is exported into the script so you can feature-detect the
 running Crush (it is the literal `devel` for local builds):
 

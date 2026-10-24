@@ -544,6 +544,11 @@
     },
     "Options": {
       "properties": {
+        "frontend_workflow": {
+          "type": "boolean",
+          "description": "Use a frontend-focused implementation and verification workflow for UI tasks",
+          "default": false
+        },
         "jev_observe": {
           "type": "boolean",
           "description": "Observe Jev routing suggestions before each prompt without changing agent behavior",

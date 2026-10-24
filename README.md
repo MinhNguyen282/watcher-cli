@@ -101,6 +101,13 @@ is `deepseek-flash`; Watcher normalizes the retired `deepseek-v4-flash` catalog
 alias and migrates saved selections while preserving Flash intent. See
 [DeepSeek's API documentation](https://api-docs.deepseek.com/) for current models.
 
+When the small model slot uses the `deepseek` provider, `agentic_fetch` uses
+DeepSeek's Search and Fetch APIs with the configured DeepSeek key. Successful
+Search and Fetch requests may be billed separately from model usage; the tool
+permission prompt calls this out before the request is made. See the
+[Search & Fetch guide](https://api-docs.deepseek.com/guides/search) for current
+pricing and billing rules.
+
 The main slot reserves a 65,536-token output budget for Thinking mode; small and
 fast keep an 8,192-token cap. Thinking and the answer share the output budget.
 If a response is cut off, Watcher displays a token-limit warning with recovery
